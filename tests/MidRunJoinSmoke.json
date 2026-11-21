@@ -1,0 +1,1 @@
+{"id":"MidRunJoinSmoke","name":"MidRunJoin fixture test","version":"0.1.0","has_dll":true,"has_pck":false,"affects_gameplay":true,"dependencies":[{"id":"MidRunJoin"}]}

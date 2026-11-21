@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests/**/*.cs" />
     <Reference Include="0Harmony" HintPath="$(GameData)/0Harmony.dll" Private="false" />
     <Reference Include="GodotSharp" HintPath="$(GameData)/GodotSharp.dll" Private="false" />
     <Reference Include="sts2" HintPath="$(GameData)/sts2.dll" Private="false" />
@@ -22,4 +23,3 @@
           DestinationFolder="$(MSBuildProjectDirectory)/dist/MidRunJoin/" />
   </Target>
 </Project>
-

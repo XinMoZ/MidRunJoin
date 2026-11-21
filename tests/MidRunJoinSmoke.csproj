@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>MidRunJoinSmoke</AssemblyName>
+    <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</GameDir>
+    <GameData>$(GameDir)/data_sts2_windows_x86_64</GameData>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="sts2" HintPath="$(GameData)/sts2.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(GameData)/0Harmony.dll" Private="false" />
+    <Reference Include="GodotSharp" HintPath="$(GameData)/GodotSharp.dll" Private="false" />
+    <None Update="MidRunJoinSmoke.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <Version>0.1.0</Version>
+    <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</GameDir>
+    <GameData>$(GameDir)/data_sts2_windows_x86_64</GameData>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="sts2" HintPath="$(GameData)/sts2.dll" Private="false" />
+  </ItemGroup>
+
+  <Target Name="CheckGameAssembly" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(GameData)/sts2.dll')" Text="找不到 $(GameData)/sts2.dll。请用 -p:GameDir 指定游戏安装目录。" />
+  </Target>
+
+  <Target Name="StageMod" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <Copy SourceFiles="$(TargetPath);$(MSBuildProjectDirectory)/MidRunJoin.json"
+          DestinationFolder="$(MSBuildProjectDirectory)/dist/MidRunJoin/" />
+  </Target>
+</Project>

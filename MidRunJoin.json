@@ -1,0 +1,11 @@
+{
+  "id": "MidRunJoin",
+  "name": "MidRunJoin · 中途加入",
+  "author": "xinmo",
+  "description": "联机冒险中途加入的开发骨架。当前版本仅记录初始化日志。",
+  "version": "0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "affects_gameplay": true,
+  "dependencies": []
+}

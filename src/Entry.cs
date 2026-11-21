@@ -8,6 +8,8 @@ public static class Entry
 {
     public static void Init()
     {
-        Log.Info("[MidRunJoin] Project skeleton loaded.");
+        new HarmonyLib.Harmony("xinmo.MidRunJoin").PatchAll(typeof(Entry).Assembly);
+        Log.Info("[MidRunJoin] Checkpoint lobby enabled.");
     }
 }
+

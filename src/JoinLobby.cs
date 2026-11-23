@@ -1,72 +1,967 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.Helpers;
+using MegaCrit.Sts2.Core.Localization;
+using MegaCrit.Sts2.Core.Localization.Fonts;
 using MegaCrit.Sts2.Core.Logging;
+using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
+using MegaCrit.Sts2.Core.Platform;
+using MegaCrit.Sts2.Core.Platform.Steam;
 using MegaCrit.Sts2.Core.Saves;
+using MidRunJoin.CatchUp;
 
 namespace MidRunJoin;
 
 [HarmonyPatch]
 internal static class JoinLobby
 {
-    private static readonly ConditionalWeakTable<SerializableRun, object> Expanded = new();
+    internal sealed record ExpandedSession(ulong[] GuestIds, string FlowId);
 
-    [HarmonyPrefix, HarmonyPatch(typeof(NMultiplayerSubmenu), nameof(NMultiplayerSubmenu.StartHost))]
-    private static bool ChooseGuest(NMultiplayerSubmenu __instance, SerializableRun run)
+    internal const string FloatingButtonName = "MidRunJoinOverlayButton";
+    internal const string RosterModalName = "MidRunJoinRosterModal";
+
+    private static readonly ConditionalWeakTable<SerializableRun, ExpandedSession> Expanded = new();
+
+    [HarmonyPostfix, HarmonyPatch(typeof(NMultiplayerSubmenu), nameof(NMultiplayerSubmenu._Ready))]
+    private static void AttachFloatingJoinButton(NMultiplayerSubmenu __instance, NSubmenuButton? ____loadButton)
     {
-        if (Expanded.TryGetValue(run, out _) || !Input.IsKeyPressed(Key.Shift))
-            return true;
+        if (____loadButton == null || ____loadButton.GetNodeOrNull<Button>(FloatingButtonName) != null)
+            return;
 
-        var dialog = new ConfirmationDialog
+        var btn = new Button
         {
-            Title = "中途加入",
-            OkButtonText = "建立扩员大厅",
-            CancelButtonText = "取消",
-            DialogHideOnOk = false,
-            Exclusive = true
+            Name = FloatingButtonName,
+            Text = ModLoc.FloatingButtonText,
+            TooltipText = ModLoc.FloatingButtonTooltip,
+            AnchorLeft = 1f,
+            AnchorRight = 1f,
+            AnchorTop = 0f,
+            AnchorBottom = 0f,
+            OffsetLeft = -186,
+            OffsetRight = -16,
+            OffsetTop = 16,
+            OffsetBottom = 58,
+            ZIndex = 10,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+            FocusMode = Control.FocusModeEnum.None
         };
-        var fields = new VBoxContainer();
-        var message = new Label { Text = "输入新人的 SteamID64 或本地 ENet clientId。\n新人以铁甲战士的初始牌组、金币和遗物加入。" };
-        var input = new LineEdit { PlaceholderText = "玩家 ID" };
-        fields.AddChild(message);
-        fields.AddChild(input);
-        dialog.AddChild(fields);
-        __instance.AddChild(dialog);
-        dialog.Canceled += dialog.QueueFree;
-        dialog.Confirmed += () =>
+        StyleFloatingButton(btn);
+        btn.Pressed += () => OnFloatingJoinPressed(__instance);
+        ____loadButton.AddChild(btn);
+
+        // Keep the floating button text & font synced if the player switches language in Settings.
+        void OnLocaleChanged()
         {
-            if (!ulong.TryParse(input.Text.Trim(), out ulong id) || id == 0)
+            if (GodotObject.IsInstanceValid(btn))
             {
-                message.Text = "请输入有效的非零数字玩家 ID。";
+                btn.Text = ModLoc.FloatingButtonText;
+                btn.TooltipText = ModLoc.FloatingButtonTooltip;
+                StyleFloatingButton(btn);
+            }
+        }
+        LocManager.Instance?.SubscribeToLocaleChange(OnLocaleChanged);
+        btn.TreeExiting += () => LocManager.Instance?.UnsubscribeToLocaleChange(OnLocaleChanged);
+    }
+
+    private static void StyleFloatingButton(Button btn)
+    {
+        VanillaUi.StyleButton(
+            btn,
+            normalBg: new Color(0.106f, 0.145f, 0.200f, 0.94f),
+            hoverBg: new Color(0.165f, 0.235f, 0.325f, 0.98f),
+            pressedBg: new Color(0.075f, 0.102f, 0.145f, 0.98f),
+            normalBorder: VanillaUi.GoldBorder,
+            hoverBorder: StsColors.gold,
+            fontSize: 18,
+            fontType: FontType.Bold,
+            radius: 8,
+            padH: 12,
+            padV: 4,
+            outlineSize: 3);
+    }
+
+    private static void OnFloatingJoinPressed(NMultiplayerSubmenu menu)
+    {
+        var platformType = SteamInitializer.Initialized && !CommandLineHelper.HasArg("fastmp")
+            ? PlatformType.Steam
+            : PlatformType.None;
+        var readResult = SaveManager.Instance.LoadAndCanonicalizeMultiplayerRunSave(PlatformUtil.GetLocalPlayerId(platformType));
+        if (!readResult.Success || readResult.SaveData == null)
+        {
+            Log.Warn($"[MidRunJoin] Failed to load multiplayer save from floating button (status={readResult.Status}).");
+            var popup = NErrorPopup.CreateForRunSave(readResult.Status);
+            if (popup != null && NModalContainer.Instance != null)
+            {
+                NModalContainer.Instance.Add(popup);
+                NModalContainer.Instance.ShowBackstop();
+            }
+            return;
+        }
+        OpenGuestDialog(menu, readResult.SaveData);
+    }
+
+    internal static void OpenGuestDialog(NMultiplayerSubmenu __instance, SerializableRun run)
+    {
+        // Prevent duplicate modals if triggered twice
+        if (__instance.GetNodeOrNull<Control>(RosterModalName) is { } existingModal)
+        {
+            __instance.RemoveChild(existingModal);
+            existingModal.QueueFree();
+        }
+
+        var queued = new List<GuestSpec>();
+        var queuedNames = new Dictionary<ulong, string>();
+        var removedIds = new HashSet<ulong>();
+        var characters = ModelDb.AllCharacters.ToArray();
+        var flows = CatchUpRegistry.All;
+        ulong hostId = run.Players.Count > 0 ? run.Players[0].NetId : 0;
+        bool isSteamMode = SteamHelper.IsSteamReady;
+
+        // Full-screen vanilla modal overlay with dark backstop
+        var modalRoot = new Control
+        {
+            Name = RosterModalName,
+            ZIndex = 100,
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        modalRoot.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+
+        var backdrop = new ColorRect
+        {
+            Name = "Backdrop",
+            Color = StsColors.screenBackdrop,
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        backdrop.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        modalRoot.AddChild(backdrop);
+
+        var center = new CenterContainer
+        {
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        center.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+        modalRoot.AddChild(center);
+
+        int existingHeight = Math.Clamp(run.Players.Count * 46 + 8, 92, 196);
+        int extraExisting = Math.Max(0, existingHeight - 92);
+        int targetHeight = Math.Min((isSteamMode ? 680 : 530) + extraExisting, 780);
+        int targetWidth = 720;
+
+        var panel = new PanelContainer
+        {
+            Name = "RosterPanel",
+            CustomMinimumSize = new Vector2(targetWidth, targetHeight),
+            SizeFlagsHorizontal = Control.SizeFlags.ShrinkCenter,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+            MouseFilter = Control.MouseFilterEnum.Stop
+        };
+        panel.AddThemeStyleboxOverride("panel", VanillaUi.MakeBox(
+            VanillaUi.PanelBg,
+            VanillaUi.GoldBorder,
+            borderWidth: 2,
+            radius: 12,
+            padH: 22,
+            padV: 18,
+            shadowSize: 22));
+        center.AddChild(panel);
+
+        var fields = new VBoxContainer
+        {
+            Name = "ContentVBox",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            SizeFlagsVertical = Control.SizeFlags.ExpandFill
+        };
+        fields.AddThemeConstantOverride("separation", 10);
+        panel.AddChild(fields);
+
+        // --- Header row: Gold title + live party count badge ---
+        var headerRow = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        headerRow.AddThemeConstantOverride("separation", 10);
+        var titleLabel = new Label
+        {
+            Text = ModLoc.DialogTitle,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        VanillaUi.ApplyFont(titleLabel, FontType.Bold, 26, StsColors.gold, outlineSize: 4);
+        headerRow.AddChild(titleLabel);
+
+        var partyCountBadge = VanillaUi.CreateBadgePill(
+            ModLoc.PartyCountBadge(run.Players.Count),
+            new Color(0.18f, 0.24f, 0.30f, 0.95f),
+            StsColors.gold,
+            fontSize: 14);
+        var partyCountLabel = partyCountBadge.GetChild<Label>(0);
+        headerRow.AddChild(partyCountBadge);
+        fields.AddChild(headerRow);
+        fields.AddChild(VanillaUi.CreateGoldDivider());
+
+        // --- Status / summary banner ---
+        var message = new Label
+        {
+            Name = "StatusLabel",
+            Text = ModLoc.DialogIntro(isSteamMode),
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+        };
+        VanillaUi.ApplyFont(message, FontType.Regular, 14, VanillaUi.MutedText);
+        fields.AddChild(message);
+
+        void SetStatusMessage(string text, bool isError = false)
+        {
+            message.Text = text;
+            message.AddThemeColorOverride("font_color", isError ? StsColors.red : StsColors.cream);
+        }
+
+        // --- Section 1: Existing party members ---
+        var existingCard = VanillaUi.CreateSectionCard(out var existingSection);
+        var existingHeader = new Label { Text = ModLoc.SectionCurrentParty };
+        VanillaUi.ApplyFont(existingHeader, FontType.Bold, 15, StsColors.gold, outlineSize: 2);
+        existingSection.AddChild(existingHeader);
+
+        var existingScroll = new ScrollContainer
+        {
+            Name = "ExistingMembersScroll",
+            CustomMinimumSize = new Vector2(0, existingHeight),
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+        };
+        var existingBox = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        existingBox.AddThemeConstantOverride("separation", 6);
+        existingScroll.AddChild(existingBox);
+        existingSection.AddChild(existingScroll);
+        fields.AddChild(existingCard);
+
+        // Friend selection state (Steam mode)
+        LineEdit? friendSearch = null;
+        CheckBox? onlineOnlyCheck = null;
+        Label? friendCountLabel = null;
+        VBoxContainer? friendListBox = null;
+        Label? selectedFriendLabel = null;
+        List<SteamFriendEntry> allFriends = new();
+        List<SteamFriendEntry> visibleFriends = new();
+        SteamFriendEntry? selectedFriend = null;
+        ulong lastFriendClickId = 0;
+        ulong lastFriendClickMs = 0;
+
+        void UpdateSelectedFriendLabel()
+        {
+            if (selectedFriendLabel == null)
+                return;
+            if (selectedFriend.HasValue)
+            {
+                selectedFriendLabel.Text = ModLoc.SelectedFriendLabel(selectedFriend.Value.Name);
+                selectedFriendLabel.AddThemeColorOverride("font_color", StsColors.aqua);
+            }
+            else
+            {
+                selectedFriendLabel.Text = ModLoc.SelectFriendHint;
+                selectedFriendLabel.AddThemeColorOverride("font_color", VanillaUi.MutedText);
+            }
+        }
+
+        void UpdateSummaryMessage()
+        {
+            int kept = run.Players.Count - removedIds.Count;
+            int finalCount = kept + queued.Count;
+            partyCountLabel.Text = ModLoc.PartyCountBadge(finalCount);
+            SetStatusMessage(ModLoc.RosterSummary(kept, removedIds.Count, queued.Count, finalCount), isError: false);
+        }
+
+        Action? tryAddSelectedOrInput = null;
+
+        void PopulateFriendList()
+        {
+            if (friendListBox == null)
+                return;
+
+            foreach (Node child in friendListBox.GetChildren())
+            {
+                friendListBox.RemoveChild(child);
+                child.QueueFree();
+            }
+
+            visibleFriends = SteamHelper.FilterFriends(
+                allFriends,
+                friendSearch?.Text,
+                onlineOnlyCheck?.ButtonPressed ?? false);
+
+            if (selectedFriend.HasValue && !visibleFriends.Any(f => f.SteamId == selectedFriend.Value.SteamId))
+            {
+                selectedFriend = null;
+                UpdateSelectedFriendLabel();
+            }
+
+            if (friendCountLabel != null)
+                friendCountLabel.Text = $"{visibleFriends.Count}/{allFriends.Count}";
+
+            if (visibleFriends.Count == 0)
+            {
+                var emptyLbl = new Label
+                {
+                    Text = ModLoc.NoFriendsMatch,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    CustomMinimumSize = new Vector2(0, 44),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                VanillaUi.ApplyFont(emptyLbl, FontType.Regular, 14, VanillaUi.MutedText);
+                friendListBox.AddChild(emptyLbl);
+                return;
+            }
+
+            foreach (var friend in visibleFriends)
+            {
+                var entry = friend;
+                bool isSelected = selectedFriend.HasValue && selectedFriend.Value.SteamId == entry.SteamId;
+
+                var rowBtn = new Button
+                {
+                    CustomMinimumSize = new Vector2(0, 36),
+                    SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                    FocusMode = Control.FocusModeEnum.None
+                };
+                VanillaUi.StyleFriendRowButton(rowBtn, isSelected);
+
+                var rowContent = new HBoxContainer
+                {
+                    MouseFilter = Control.MouseFilterEnum.Ignore
+                };
+                rowContent.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+                rowContent.AddThemeConstantOverride("separation", 8);
+                rowContent.OffsetLeft = 10;
+                rowContent.OffsetRight = -10;
+                rowBtn.AddChild(rowContent);
+
+                var nameLbl = new Label
+                {
+                    Text = entry.Name,
+                    SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    MouseFilter = Control.MouseFilterEnum.Ignore,
+                    TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis
+                };
+                VanillaUi.ApplyFont(nameLbl, FontType.Regular, 15, isSelected ? StsColors.gold : StsColors.cream);
+                rowContent.AddChild(nameLbl);
+
+                Color statusColor = entry.IsPlayingSts2
+                    ? StsColors.aqua
+                    : (entry.IsOnline ? StsColors.blue : VanillaUi.MutedText);
+                Color statusBg = entry.IsPlayingSts2
+                    ? new Color(0.08f, 0.25f, 0.22f, 0.9f)
+                    : (entry.IsOnline ? new Color(0.10f, 0.20f, 0.28f, 0.9f) : new Color(0.16f, 0.18f, 0.21f, 0.85f));
+                rowContent.AddChild(VanillaUi.CreateBadgePill(entry.StatusTag, statusBg, statusColor, 12));
+
+                rowBtn.Pressed += () =>
+                {
+                    ulong now = Time.GetTicksMsec();
+                    bool isDoubleClick = lastFriendClickId == entry.SteamId && now - lastFriendClickMs <= 420;
+                    lastFriendClickId = entry.SteamId;
+                    lastFriendClickMs = now;
+
+                    selectedFriend = entry;
+                    UpdateSelectedFriendLabel();
+                    if (isDoubleClick)
+                    {
+                        lastFriendClickId = 0;
+                        tryAddSelectedOrInput?.Invoke();
+                    }
+                    else
+                    {
+                        PopulateFriendList();
+                    }
+                };
+
+                friendListBox.AddChild(rowBtn);
+            }
+        }
+
+        void RefreshFriendPicker()
+        {
+            if (friendListBox == null)
+                return;
+            var activeIds = run.Players.Where(p => !removedIds.Contains(p.NetId)).Select(p => p.NetId)
+                .Concat(queued.Select(q => q.GuestId));
+            allFriends = SteamHelper.GetCandidateFriends(activeIds);
+            PopulateFriendList();
+        }
+
+        void RebuildExistingUi()
+        {
+            int savedScroll = existingScroll.ScrollVertical;
+            foreach (Node child in existingBox.GetChildren())
+            {
+                existingBox.RemoveChild(child);
+                child.QueueFree();
+            }
+            for (int i = 0; i < run.Players.Count; i++)
+            {
+                var p = run.Players[i];
+                ulong pid = p.NetId;
+                bool isHost = pid == hostId;
+                bool isRemoved = removedIds.Contains(pid);
+                var charModel = ResolveCharacter(p.CharacterId, characters);
+                string charName = charModel != null ? CharacterName(charModel) : (p.CharacterId?.Entry ?? "?");
+                string displayName = SteamHelper.FormatPlayerIdentity(pid, SteamHelper.TryGetPlayerName(pid), i + 1);
+
+                var rowCard = new PanelContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+                rowCard.AddThemeStyleboxOverride("panel", VanillaUi.MakeBox(
+                    isRemoved ? new Color(0.22f, 0.12f, 0.14f, 0.88f) : VanillaUi.RowBg,
+                    isRemoved ? new Color(0.75f, 0.30f, 0.30f, 0.85f) : (isHost ? VanillaUi.GoldBorder : VanillaUi.SubtleBorder),
+                    borderWidth: 1,
+                    radius: 6,
+                    padH: 10,
+                    padV: 5));
+
+                var row = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+                row.AddThemeConstantOverride("separation", 10);
+                rowCard.AddChild(row);
+
+                row.AddChild(VanillaUi.CreateCharacterIcon(charModel, 28));
+
+                var infoBox = new HBoxContainer
+                {
+                    SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                    SizeFlagsVertical = Control.SizeFlags.ShrinkCenter
+                };
+                infoBox.AddThemeConstantOverride("separation", 8);
+
+                var nameLbl = new Label
+                {
+                    Text = displayName,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                VanillaUi.ApplyFont(nameLbl, FontType.Bold, 15, isRemoved ? VanillaUi.MutedText : StsColors.cream, outlineSize: 1);
+                infoBox.AddChild(nameLbl);
+
+                var charLbl = new Label
+                {
+                    Text = $"·  {charName}",
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                VanillaUi.ApplyFont(charLbl, FontType.Regular, 14, isRemoved ? VanillaUi.MutedText : (charModel?.NameColor ?? StsColors.cream));
+                infoBox.AddChild(charLbl);
+                row.AddChild(infoBox);
+
+                if (isHost)
+                {
+                    row.AddChild(VanillaUi.CreateBadgePill(
+                        ModLoc.HostBadge,
+                        new Color(0.28f, 0.22f, 0.08f, 0.95f),
+                        StsColors.gold,
+                        fontSize: 12));
+                }
+                else
+                {
+                    if (isRemoved)
+                    {
+                        row.AddChild(VanillaUi.CreateBadgePill(
+                            ModLoc.RemovingBadge,
+                            new Color(0.35f, 0.12f, 0.14f, 0.95f),
+                            StsColors.red,
+                            fontSize: 12));
+                    }
+                    var toggleBtn = new Button
+                    {
+                        Name = $"RemoveExisting_{pid}",
+                        Text = isRemoved ? ModLoc.UndoRemoveButton : ModLoc.RemoveButton,
+                        FocusMode = Control.FocusModeEnum.None
+                    };
+                    if (isRemoved)
+                        VanillaUi.StyleSecondaryButton(toggleBtn, 13);
+                    else
+                        VanillaUi.StyleDangerSmallButton(toggleBtn, 13);
+
+                    toggleBtn.Pressed += () =>
+                    {
+                        if (!removedIds.Remove(pid))
+                            removedIds.Add(pid);
+                        RebuildExistingUi();
+                        RefreshFriendPicker();
+                        UpdateSummaryMessage();
+                    };
+                    row.AddChild(toggleBtn);
+                }
+
+                existingBox.AddChild(rowCard);
+            }
+            existingScroll.ScrollVertical = savedScroll;
+        }
+        RebuildExistingUi();
+
+        // --- Section 2: Add New Members ---
+        var addCard = VanillaUi.CreateSectionCard(out var addSection);
+        var addHeader = new Label { Text = ModLoc.SectionAddGuests };
+        VanillaUi.ApplyFont(addHeader, FontType.Bold, 15, StsColors.gold, outlineSize: 2);
+        addSection.AddChild(addHeader);
+
+        if (isSteamMode)
+        {
+            var searchRow = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            searchRow.AddThemeConstantOverride("separation", 8);
+
+            friendSearch = new LineEdit
+            {
+                Name = "FriendSearchInput",
+                PlaceholderText = ModLoc.FriendSearchPlaceholder,
+                ClearButtonEnabled = true,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+            };
+            VanillaUi.StyleLineEdit(friendSearch, 14);
+
+            onlineOnlyCheck = new CheckBox
+            {
+                Text = ModLoc.OnlineOnlyCheckbox,
+                ButtonPressed = true,
+                FocusMode = Control.FocusModeEnum.None
+            };
+            VanillaUi.StyleCheckBox(onlineOnlyCheck, 14);
+
+            friendCountLabel = new Label
+            {
+                Text = "0/0",
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            VanillaUi.ApplyFont(friendCountLabel, FontType.Regular, 13, VanillaUi.MutedText);
+
+            searchRow.AddChild(friendSearch);
+            searchRow.AddChild(onlineOnlyCheck);
+            searchRow.AddChild(friendCountLabel);
+            addSection.AddChild(searchRow);
+
+            var friendScroll = new ScrollContainer
+            {
+                Name = "SteamFriendsScroll",
+                CustomMinimumSize = new Vector2(0, 126),
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+            };
+            friendListBox = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            friendListBox.AddThemeConstantOverride("separation", 4);
+            friendScroll.AddChild(friendListBox);
+            addSection.AddChild(friendScroll);
+
+            friendSearch.TextChanged += _ => PopulateFriendList();
+            onlineOnlyCheck.Toggled += _ => PopulateFriendList();
+        }
+
+        // Character selector + Add action row
+        var inputRow = new HBoxContainer
+        {
+            Name = "GuestInputRow",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+        };
+        inputRow.AddThemeConstantOverride("separation", 8);
+
+        LineEdit? input = null;
+        if (isSteamMode)
+        {
+            selectedFriendLabel = new Label
+            {
+                Name = "SelectedFriendLabel",
+                Text = ModLoc.SelectFriendHint,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis
+            };
+            VanillaUi.ApplyFont(selectedFriendLabel, FontType.Regular, 14, VanillaUi.MutedText);
+            inputRow.AddChild(selectedFriendLabel);
+        }
+        else
+        {
+            input = new LineEdit
+            {
+                Name = "GuestIdInput",
+                PlaceholderText = ModLoc.GuestIdPlaceholder,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+            };
+            VanillaUi.StyleLineEdit(input, 14);
+            inputRow.AddChild(input);
+        }
+
+        var pickerCharIcon = VanillaUi.CreateCharacterIcon(characters.Length > 0 ? characters[0] : null, 28);
+        inputRow.AddChild(pickerCharIcon);
+
+        var picker = new OptionButton
+        {
+            Name = "CharacterPicker",
+            CustomMinimumSize = new Vector2(150, 34),
+            FocusMode = Control.FocusModeEnum.None
+        };
+        foreach (var c in characters)
+            picker.AddItem(CharacterName(c));
+        picker.Selected = 0;
+        VanillaUi.StyleOptionButton(picker, 14);
+        picker.ItemSelected += idx =>
+        {
+            if (idx >= 0 && idx < characters.Length)
+                VanillaUi.SetCharacterIconTexture(pickerCharIcon, characters[(int)idx]);
+        };
+        inputRow.AddChild(picker);
+
+        var addButton = new Button
+        {
+            Name = "AddGuestButton",
+            Text = ModLoc.AddGuestButton,
+            CustomMinimumSize = new Vector2(92, 34),
+            FocusMode = Control.FocusModeEnum.None
+        };
+        VanillaUi.StyleSecondaryButton(addButton, 14);
+        inputRow.AddChild(addButton);
+        addSection.AddChild(inputRow);
+
+        // Queued guests list (inside Add New Members section, collapses neatly when empty)
+        var queueHeader = new Label
+        {
+            Text = ModLoc.SectionQueuedGuests,
+            Visible = false
+        };
+        VanillaUi.ApplyFont(queueHeader, FontType.Bold, 14, StsColors.aqua);
+        addSection.AddChild(queueHeader);
+
+        var queueScroll = new ScrollContainer
+        {
+            Name = "QueuedGuestsScroll",
+            CustomMinimumSize = new Vector2(0, 0),
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            Visible = false
+        };
+        var queueBox = new VBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        queueBox.AddThemeConstantOverride("separation", 5);
+        queueScroll.AddChild(queueBox);
+        addSection.AddChild(queueScroll);
+        fields.AddChild(addCard);
+
+        void RebuildQueueUi()
+        {
+            foreach (Node child in queueBox.GetChildren())
+            {
+                queueBox.RemoveChild(child);
+                child.QueueFree();
+            }
+
+            bool hasQueued = queued.Count > 0;
+            queueHeader.Visible = hasQueued;
+            queueScroll.Visible = hasQueued;
+            queueScroll.CustomMinimumSize = hasQueued ? new Vector2(0, Math.Clamp(queued.Count * 42 + 4, 46, 110)) : Vector2.Zero;
+
+            for (int i = 0; i < queued.Count; i++)
+            {
+                int idx = i;
+                var g = queued[i];
+                string displayName = queuedNames.TryGetValue(g.GuestId, out var knownName)
+                    ? knownName
+                    : SteamHelper.FormatPlayerIdentity(g.GuestId, SteamHelper.TryGetPlayerName(g.GuestId));
+
+                var rowCard = new PanelContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+                rowCard.AddThemeStyleboxOverride("panel", VanillaUi.MakeBox(
+                    new Color(0.11f, 0.21f, 0.20f, 0.90f),
+                    new Color(0.17f, 0.65f, 0.55f, 0.75f),
+                    borderWidth: 1,
+                    radius: 6,
+                    padH: 10,
+                    padV: 4));
+
+                var row = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+                row.AddThemeConstantOverride("separation", 8);
+                rowCard.AddChild(row);
+
+                row.AddChild(VanillaUi.CreateCharacterIcon(g.Character, 24));
+
+                var nameLbl = new Label
+                {
+                    Text = $"{displayName}  ·  {CharacterName(g.Character)}",
+                    SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                VanillaUi.ApplyFont(nameLbl, FontType.Regular, 14, StsColors.cream);
+                row.AddChild(nameLbl);
+
+                row.AddChild(VanillaUi.CreateBadgePill(
+                    ModLoc.NewGuestBadge,
+                    new Color(0.08f, 0.26f, 0.22f, 0.95f),
+                    StsColors.aqua,
+                    fontSize: 12));
+
+                var rm = new Button
+                {
+                    Text = ModLoc.RemoveButton,
+                    FocusMode = Control.FocusModeEnum.None
+                };
+                VanillaUi.StyleDangerSmallButton(rm, 13);
+                rm.Pressed += () =>
+                {
+                    queued.RemoveAt(idx);
+                    RebuildQueueUi();
+                    RefreshFriendPicker();
+                    UpdateSummaryMessage();
+                };
+                row.AddChild(rm);
+                queueBox.AddChild(rowCard);
+            }
+        }
+
+        bool TryAddCurrentSelection()
+        {
+            ulong id;
+            string displayName;
+            if (isSteamMode)
+            {
+                if (!selectedFriend.HasValue)
+                {
+                    SetStatusMessage(ModLoc.ErrSelectFriendFirst, isError: true);
+                    return false;
+                }
+                id = selectedFriend.Value.SteamId;
+                displayName = selectedFriend.Value.Name;
+            }
+            else
+            {
+                if (input == null || !TryParseGuestId(input.Text, out id))
+                {
+                    SetStatusMessage(ModLoc.ErrInvalidPlayerId, isError: true);
+                    return false;
+                }
+                displayName = SteamHelper.FormatPlayerIdentity(id, SteamHelper.TryGetPlayerName(id));
+            }
+
+            bool stillInParty = run.Players.Any(p => p.NetId == id && !removedIds.Contains(id));
+            if (stillInParty || queued.Any(q => q.GuestId == id))
+            {
+                SetStatusMessage(ModLoc.ErrDuplicatePlayer(displayName), isError: true);
+                return false;
+            }
+
+            queued.Add(new GuestSpec(id, characters[Math.Max(0, picker.Selected)]));
+            queuedNames[id] = displayName;
+            if (isSteamMode)
+            {
+                selectedFriend = null;
+                UpdateSelectedFriendLabel();
+            }
+            else if (input != null)
+            {
+                input.Text = "";
+            }
+            RebuildQueueUi();
+            RefreshFriendPicker();
+            UpdateSummaryMessage();
+            return true;
+        }
+
+        tryAddSelectedOrInput = () => TryAddCurrentSelection();
+        addButton.Pressed += () => TryAddCurrentSelection();
+
+        if (isSteamMode)
+        {
+            RefreshFriendPicker();
+            if (visibleFriends.Count == 0 && allFriends.Count > 0 && onlineOnlyCheck != null)
+            {
+                onlineOnlyCheck.ButtonPressed = false;
+                PopulateFriendList();
+            }
+        }
+
+        // --- Section 3: Catch-up rewards ---
+        var flowCard = VanillaUi.CreateSectionCard(out var flowSection, padH: 12, padV: 8);
+        var flowRow = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        flowRow.AddThemeConstantOverride("separation", 10);
+
+        var flowLbl = new Label
+        {
+            Text = ModLoc.SectionCatchUp,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        VanillaUi.ApplyFont(flowLbl, FontType.Bold, 15, StsColors.gold, outlineSize: 2);
+        flowRow.AddChild(flowLbl);
+
+        var flowPicker = new OptionButton
+        {
+            Name = "CatchUpFlowPicker",
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
+            FocusMode = Control.FocusModeEnum.None
+        };
+        foreach (var f in flows)
+            flowPicker.AddItem(f.DisplayName);
+        flowPicker.Selected = 0;
+        VanillaUi.StyleOptionButton(flowPicker, 14);
+        flowRow.AddChild(flowPicker);
+        flowSection.AddChild(flowRow);
+
+        var flowDesc = new Label
+        {
+            Text = flows[0].Description,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+        };
+        VanillaUi.ApplyFont(flowDesc, FontType.Regular, 13, VanillaUi.MutedText);
+        flowPicker.ItemSelected += idx =>
+        {
+            if (idx >= 0 && idx < flows.Count)
+                flowDesc.Text = flows[(int)idx].Description;
+        };
+        flowSection.AddChild(flowDesc);
+        fields.AddChild(flowCard);
+
+        // --- Footer buttons ---
+        var footerRow = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        footerRow.AddThemeConstantOverride("separation", 14);
+        footerRow.Alignment = BoxContainer.AlignmentMode.End;
+
+        var cancelBtn = new Button
+        {
+            Name = "CancelButton",
+            Text = ModLoc.DialogCancelButton,
+            CustomMinimumSize = new Vector2(110, 42),
+            FocusMode = Control.FocusModeEnum.None
+        };
+        VanillaUi.StyleCancelButton(cancelBtn, 16);
+        var escShortcut = new Shortcut();
+        escShortcut.Events.Add(new InputEventKey { Keycode = Key.Escape });
+        cancelBtn.Shortcut = escShortcut;
+        cancelBtn.ShortcutInTooltip = false;
+
+        var okBtn = new Button
+        {
+            Name = "ConfirmButton",
+            Text = ModLoc.DialogOkButton,
+            CustomMinimumSize = new Vector2(180, 42),
+            FocusMode = Control.FocusModeEnum.None
+        };
+        VanillaUi.StylePrimaryButton(okBtn, 16);
+
+        footerRow.AddChild(cancelBtn);
+        footerRow.AddChild(okBtn);
+        fields.AddChild(footerRow);
+
+        void CloseModal()
+        {
+            if (GodotObject.IsInstanceValid(modalRoot))
+            {
+                modalRoot.Visible = false;
+                if (modalRoot.GetParent() is { } parent)
+                    parent.RemoveChild(modalRoot);
+                modalRoot.QueueFree();
+            }
+        }
+
+        cancelBtn.Pressed += CloseModal;
+
+        okBtn.Pressed += () =>
+        {
+            if (isSteamMode)
+            {
+                if (selectedFriend.HasValue && !TryAddCurrentSelection())
+                    return;
+            }
+            else if (input != null && !string.IsNullOrWhiteSpace(input.Text))
+            {
+                if (!TryAddCurrentSelection())
+                    return;
+            }
+
+            if (queued.Count == 0 && removedIds.Count == 0)
+            {
+                SetStatusMessage(ModLoc.ErrNoChangesSelected, isError: true);
                 return;
             }
             try
             {
-                StartExpandedLobby(__instance, run, id);
-                dialog.Hide();
-                dialog.QueueFree();
+                string flowId = queued.Count > 0 ? flows[Math.Max(0, flowPicker.Selected)].Id : NoneCatchUpFlow.FlowId;
+                StartExpandedLobby(__instance, run, queued.ToArray(), flowId, removedIds.ToArray());
+                CloseModal();
             }
             catch (Exception ex)
             {
                 Log.Warn($"[MidRunJoin] Candidate preparation failed: {ex}");
-                message.Text = ex is InvalidOperationException ? ex.Message : "扩员失败，请查看游戏日志。";
+                SetStatusMessage(ex is InvalidOperationException ? ex.Message : ModLoc.ErrGenericPrepareFailed, isError: true);
             }
         };
-        dialog.PopupCentered(new Vector2I(580, 200));
-        input.GrabFocus();
-        return false;
+
+        __instance.AddChild(modalRoot);
+
+        // Smooth vanilla-like fade-in animation
+        modalRoot.Modulate = new Color(1f, 1f, 1f, 0f);
+        var fade = modalRoot.CreateTween();
+        fade.TweenProperty(modalRoot, "modulate:a", 1f, 0.16);
+
+        if (friendSearch != null)
+            friendSearch.GrabFocus();
+        else
+            input?.GrabFocus();
     }
 
-    internal static void StartExpandedLobby(NMultiplayerSubmenu menu, SerializableRun checkpoint, ulong id)
+    internal static bool TryParseGuestId(string? raw, out ulong id)
     {
-        var candidate = Candidate.Prepare(checkpoint, id);
-        Expanded.Add(candidate, new object());
-        Log.Info($"[MidRunJoin] Prepared guest {id} for {candidate.Players.Count} seats.");
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            id = 0;
+            return false;
+        }
+        return ulong.TryParse(raw.Trim(), out id) && id != 0;
+    }
+
+    private static CharacterModel? ResolveCharacter(ModelId? characterId, CharacterModel[] characters)
+    {
+        if (characterId == null)
+            return null;
+        try
+        {
+            var direct = ModelDb.GetByIdOrNull<CharacterModel>(characterId);
+            if (direct != null)
+                return direct;
+        }
+        catch
+        {
+            // Fall through to linear match.
+        }
+        return characters.FirstOrDefault(c =>
+            c.Id == characterId ||
+            string.Equals(c.Id.Entry, characterId.Entry, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string CharacterName(CharacterModel c)
+    {
+        try { return c.Title.GetFormattedText(); }
+        catch { return c.Id.Entry; }
+    }
+
+    internal static void StartExpandedLobby(NMultiplayerSubmenu menu, SerializableRun checkpoint, ulong id) =>
+        StartExpandedLobby(menu, checkpoint, [new GuestSpec(id, ModelDb.Character<MegaCrit.Sts2.Core.Models.Characters.Ironclad>())], CatchUpRegistry.Default.Id, null);
+
+    internal static void StartExpandedLobby(NMultiplayerSubmenu menu, SerializableRun checkpoint, ulong id, CharacterModel character) =>
+        StartExpandedLobby(menu, checkpoint, [new GuestSpec(id, character)], CatchUpRegistry.Default.Id, null);
+
+    internal static void StartExpandedLobby(
+        NMultiplayerSubmenu menu,
+        SerializableRun checkpoint,
+        IReadOnlyList<GuestSpec> guests,
+        string? flowId = null,
+        IReadOnlyCollection<ulong>? removedPlayerIds = null)
+    {
+        var resolvedFlow = guests.Count > 0 ? CatchUpRegistry.GetById(flowId) : CatchUpRegistry.GetById(NoneCatchUpFlow.FlowId);
+        var candidate = Candidate.Prepare(checkpoint, guests, removedPlayerIds, resolvedFlow.Id);
+        var guestIds = guests.Select(g => g.GuestId).ToArray();
+        Expanded.Add(candidate, new ExpandedSession(guestIds, resolvedFlow.Id));
+        Log.Info($"[MidRunJoin] Prepared roster change: +{guests.Count} guest(s), -{removedPlayerIds?.Count ?? 0} removed -> {candidate.Players.Count} seats (flow={resolvedFlow.Id}).");
         menu.StartHost(candidate);
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(NMultiplayerLoadGameScreen), nameof(NMultiplayerLoadGameScreen.InitializeAsHost))]
+    private static void OnExpandedHostLobbyCreated(INetGameService gameService, SerializableRun run)
+    {
+        if (Expanded.TryGetValue(run, out var session))
+        {
+            foreach (ulong guestId in session.GuestIds)
+                SteamHelper.TryInviteGuest(gameService, guestId);
+        }
     }
 
     [HarmonyPostfix, HarmonyPatch(typeof(LoadRunLobby), nameof(LoadRunLobby.IsAboutToBeginGame))]

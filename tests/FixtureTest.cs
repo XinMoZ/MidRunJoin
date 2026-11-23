@@ -117,25 +117,31 @@ public static class FixtureTest
     {
         var ironclad = ModelDb.Character<Ironclad>();
 
-        // 1. Non-standard game mode
+        // 1. Daily run still rejected (leaderboard integrity)
         var nonStd = CloneRun(validMapCp);
         nonStd.GameMode = GameMode.Daily;
-        ExpectInvalidOp(() => InvokePrepare(nonStd, new GuestSpec(3, ironclad)), "GameMode != Standard");
+        ExpectInvalidOp(() => InvokePrepare(nonStd, new GuestSpec(3, ironclad)), "GameMode == Daily");
 
-        // 2. Custom game flag
+        // 2. Custom game flag is now ACCEPTED (for Custom Mode & gameplay mods!)
         var custom = CloneRun(validMapCp);
         custom.IsCustomGame = true;
-        ExpectInvalidOp(() => InvokePrepare(custom, new GuestSpec(3, ironclad)), "IsCustomGame == true");
+        var customCand = InvokePrepare(custom, new GuestSpec(3, ironclad));
+        Require(customCand.Players.Count == 3 && customCand.IsCustomGame, "Custom game save should be accepted");
 
-        // 3. DailyTime present
+        // 3. DailyTime present still rejected
         var daily = CloneRun(validMapCp);
         daily.DailyTime = DateTimeOffset.UtcNow;
         ExpectInvalidOp(() => InvokePrepare(daily, new GuestSpec(3, ironclad)), "DailyTime.HasValue");
 
-        // 4. Modifiers present
-        var modded = CloneRun(validMapCp);
-        modded.Modifiers.Add(new SerializableModifier());
-        ExpectInvalidOp(() => InvokePrepare(modded, new GuestSpec(3, ironclad)), "Modifiers.Count > 0");
+        // 4. Modifiers present (e.g. gameplay mods / custom rules) are now ACCEPTED
+        var firstMod = ModelDb.GoodModifiers.FirstOrDefault();
+        if (firstMod != null)
+        {
+            var modded = CloneRun(validMapCp);
+            modded.Modifiers.Add(firstMod.ToMutable().ToSerializable());
+            var moddedCand = InvokePrepare(modded, new GuestSpec(3, ironclad));
+            Require(moddedCand.Players.Count == 3 && moddedCand.Modifiers.Count == 1, "Modded/modifier save should be accepted");
+        }
 
         // 5. Neither adding nor removing anyone
         ExpectInvalidOp(() => InvokePrepare(validMapCp), "No changes");
@@ -336,6 +342,25 @@ public static class FixtureTest
         Require(rewards1.OfType<CardRemovalReward>().Count() == 1, $"Expected 1 CardRemovalReward (1 Boss), got {rewards1.OfType<CardRemovalReward>().Count()}");
         Require(rewards1.OfType<CardReward>().Count() == 4, $"Expected 4 CardRewards (2 Monster + 1 Elite + 1 Boss), got {rewards1.OfType<CardReward>().Count()}");
 
+        // Verify native Hook.ModifyRewards integration: with Vintage modifier active, Monster combats
+        // convert their CardRewards into RelicRewards automatically via STS2's own modifier hook!
+        var vintageRun = CloneRun(rich);
+        vintageRun.Modifiers.Add(ModelDb.Modifier<MegaCrit.Sts2.Core.Models.Modifiers.Vintage>().ToMutable().ToSerializable());
+        vintageRun.Modifiers.Add(ModelDb.Modifier<MegaCrit.Sts2.Core.Models.Modifiers.AllStar>().ToMutable().ToSerializable());
+        var vintageCand = InvokePrepare(vintageRun, [new GuestSpec(3, ModelDb.Character<Silent>())], null, HistoryBellCatchUpFlow.FlowId);
+        var vintageState = RunState.FromSerializable(vintageCand);
+        var vintageGuest = vintageState.GetPlayer(3)!;
+        var vintageRewards = defaultFlow.BuildRewards(vintageState, vintageGuest);
+        Require(vintageRewards.OfType<RelicReward>().Count() == 4,
+            $"Vintage should convert 2 Monster CardRewards into RelicRewards (expected 4 RelicRewards total, got {vintageRewards.OfType<RelicReward>().Count()})");
+        Require(vintageRewards.OfType<CardReward>().Count() == 2,
+            $"Vintage should leave only Elite+Boss CardRewards (expected 2, got {vintageRewards.OfType<CardReward>().Count()})");
+
+        // Verify per-player run-start modifier detection: AllStar is detected (GenerateNeowOption != null), Vintage is not
+        var perPlayerMods = CatchUpCoordinator.CollectPerPlayerRunStartModifiers(vintageState, vintageGuest);
+        Require(perPlayerMods.Count == 1 && perPlayerMods[0].Modifier is MegaCrit.Sts2.Core.Models.Modifiers.AllStar,
+            $"Expected only AllStar as per-player startup modifier, got {perPlayerMods.Count}");
+
         // None flow
         var noneFlow = CatchUpRegistry.GetById(NoneCatchUpFlow.FlowId);
         Require(noneFlow.BuildRewards(state1, guest1).Count == 0, "NoneCatchUpFlow must produce 0 rewards");
@@ -477,7 +502,9 @@ public static class FixtureTest
         var addButton = (Button)inputRow.FindChild("AddGuestButton", recursive: true, owned: false);
 
         var allChars = ModelDb.AllCharacters.ToArray();
-        Require(charPicker.ItemCount == allChars.Length, "Character picker count mismatch");
+        Require(charPicker.ItemCount == allChars.Length + 1, "Character picker should contain all characters plus Random");
+        string randomItemText = charPicker.GetItemText(allChars.Length);
+        Require(randomItemText == "随机" || randomItemText == "Random", $"Unexpected random character option text: {randomItemText}");
 
         foreach (string badText in new[] { "", "   ", "0", "-1", "abc" })
         {

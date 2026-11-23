@@ -121,4 +121,36 @@ public static class CatchUpHistoryScanner
 
         return ids;
     }
+
+    /// <summary>
+    /// Returns the ordered list of completed combat rooms (Monster / Elite / Boss) in
+    /// <see cref="RunState.MapPointHistory"/> along with their recorded <see cref="EncounterModel"/> ID (if present),
+    /// so catch-up reward generation can invoke STS2's native room reward drop logic for each visited combat.
+    /// </summary>
+    public static List<(RoomType RoomType, ModelId? EncounterId)> GetVisitedCombatRooms(RunState state)
+    {
+        var combats = new List<(RoomType, ModelId?)>();
+        foreach (var actHistory in state.MapPointHistory)
+        {
+            foreach (var entry in actHistory)
+            {
+                RoomType? resolvedType = entry.MapPointType switch
+                {
+                    MapPointType.Monster => RoomType.Monster,
+                    MapPointType.Elite => RoomType.Elite,
+                    MapPointType.Boss => RoomType.Boss,
+                    MapPointType.Unknown when entry.HasRoomOfType(RoomType.Boss) => RoomType.Boss,
+                    MapPointType.Unknown when entry.HasRoomOfType(RoomType.Elite) => RoomType.Elite,
+                    MapPointType.Unknown when entry.HasRoomOfType(RoomType.Monster) => RoomType.Monster,
+                    _ => null
+                };
+                if (!resolvedType.HasValue)
+                    continue;
+
+                var matchingRoom = entry.FirstRoomOfType(resolvedType.Value);
+                combats.Add((resolvedType.Value, matchingRoom?.ModelId));
+            }
+        }
+        return combats;
+    }
 }

@@ -1,32 +1,39 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Relics;
+using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.Logging;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Rewards;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Saves;
 
 namespace MidRunJoin.CatchUp;
 
 /// <summary>
-/// Default CallingBell-style catch-up flow:
-/// Scans all completed rooms in MapPointHistory and builds a single native RewardsSet
-/// using the joining player's own RNG (deterministic across all peers):
-/// - Monster/Elite/Boss combats: native CardReward + rolled Gold (+ RelicReward for Elite, + CardRemovalReward for Boss)
+/// Default catch-up flow:
+/// Scans all visited rooms in MapPointHistory and delegates combat drops to STS2's native
+/// <see cref="RewardsSet"/> room reward generator + <see cref="Hook.ModifyRewards"/> (so vanilla
+/// and modded modifiers such as Vintage / BigGameHunter / custom reward hooks apply naturally),
+/// then merges all generated rewards into a single reward screen for the joining player:
+/// - Monster/Elite/Boss combats: native encounter Gold + Card/Relic/Potion/modded drops (+ CardRemoval per Boss)
 /// - Unknown / Shop: +10 Gold each
 /// - Treasure: rolled Treasure Gold + random RelicReward
 /// - RestSite: floor(count / 2) CardUpgradeReward
-/// - Ancient: 1 native "choose 1 of 3" AncientRelicChoiceReward per visited Ancient,
-///            rolled strictly from that specific Ancient's relic pool!
-/// All Gold is stacked into a single GoldReward slot.
+/// - Ancient: 1 native "choose 1 of 3" AncientRelicChoiceReward per visited Ancient
+/// All Gold is merged into a single GoldReward slot, and PotionRewards are capped to the player's potion slots.
 /// </summary>
 public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
 {
     public const string FlowId = "history_bell";
+
+    private static readonly MethodInfo? GenerateRewardsForMethod =
+        AccessTools.Method(typeof(RewardsSet), "GenerateRewardsFor", [typeof(Player), typeof(AbstractRoom)]);
 
     public string Id => FlowId;
     public string DisplayName => ModLoc.FlowHistoryBellName;
@@ -39,24 +46,54 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
         var rng = guest.PlayerRng.Rewards;
 
         int totalGold = breakdown.FlatBonusGold;
-        for (int i = 0; i < counts.MonsterCombats; i++)
-            totalGold += rng.NextInt(HistoryBellFormula.MonsterGoldMin, HistoryBellFormula.MonsterGoldMaxExclusive);
-        for (int i = 0; i < counts.EliteCombats; i++)
-            totalGold += rng.NextInt(HistoryBellFormula.EliteGoldMin, HistoryBellFormula.EliteGoldMaxExclusive);
-        for (int i = 0; i < counts.BossCombats; i++)
-            totalGold += rng.NextInt(HistoryBellFormula.BossGoldMin, HistoryBellFormula.BossGoldMaxExclusive);
+        var relicRewards = new List<Reward>();
+        var potionRewards = new List<Reward>();
+        var cardAndOtherRewards = new List<Reward>();
+
+        // 1. Combat rooms: invoke STS2's native room reward generation + Hook.ModifyRewards per visited combat
+        var visitedCombats = CatchUpHistoryScanner.GetVisitedCombatRooms(state);
+        foreach (var (roomType, encounterId) in visitedCombats)
+        {
+            var roomRewards = GenerateNativeCombatRoomRewards(state, guest, roomType, encounterId);
+            foreach (var reward in roomRewards)
+            {
+                if (reward is GoldReward gold)
+                {
+                    if (!gold.IsPopulated)
+                        gold.Populate();
+                    totalGold += Math.Max(0, gold.Amount);
+                }
+                else if (reward is PotionReward)
+                {
+                    if (potionRewards.Count < Math.Max(1, guest.MaxPotionCount))
+                        potionRewards.Add(reward);
+                }
+                else if (reward is RelicReward)
+                {
+                    relicRewards.Add(reward);
+                }
+                else
+                {
+                    cardAndOtherRewards.Add(reward);
+                }
+            }
+        }
+
+        // 2. Treasure rooms: rolled treasure gold + random relic
         for (int i = 0; i < counts.TreasureRooms; i++)
+        {
             totalGold += rng.NextInt(HistoryBellFormula.TreasureGoldMin, HistoryBellFormula.TreasureGoldMaxExclusive);
+            relicRewards.Add(new RelicReward(guest));
+        }
 
         var rewards = new List<Reward>();
 
-        // 1. All gold stacked into one single GoldReward slot
+        // Merged Gold (1 single slot)
         if (totalGold > 0)
             rewards.Add(new GoldReward(totalGold, guest));
 
-        // 2. Random relics (Elites + Treasures)
-        for (int i = 0; i < breakdown.RandomRelicRewards; i++)
-            rewards.Add(new RelicReward(guest));
+        // Relics (from native Elite drops, Treasures, and modifiers like Vintage)
+        rewards.AddRange(relicRewards);
 
         // 3. Specific visited Ancients: 1 native "choose 1 of 3" reward per visited Ancient,
         //    drawn strictly from that specific Ancient's relic pool.
@@ -99,16 +136,74 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
         for (int i = 0; i < breakdown.CardRemovalRewards; i++)
             rewards.Add(new CardRemovalReward(guest));
 
-        // 6. Combat Card Rewards (Monsters, Elites, Bosses)
-        for (int i = 0; i < breakdown.MonsterCardRewards; i++)
-            rewards.Add(new CardReward(CardCreationOptions.ForRoom(guest, RoomType.Monster), 3, guest));
-        for (int i = 0; i < breakdown.EliteCardRewards; i++)
-            rewards.Add(new CardReward(CardCreationOptions.ForRoom(guest, RoomType.Elite), 3, guest));
-        for (int i = 0; i < breakdown.BossCardRewards; i++)
-            rewards.Add(new CardReward(CardCreationOptions.ForRoom(guest, RoomType.Boss), 3, guest));
+        // 6. Native Potion drops (capped to player's potion slots)
+        rewards.AddRange(potionRewards);
 
-        Log.Info($"[MidRunJoin] HistoryBell built {rewards.Count} reward(s) for guest {guest.NetId}: gold={totalGold}, relics={breakdown.RandomRelicRewards}+{ancientChoiceCount} ancient(1-of-3), upgrades={breakdown.CardUpgradeRewards}, removals={breakdown.CardRemovalRewards}, cards={breakdown.TotalCardRewards}");
+        // 7. Native Card drops & any custom modded rewards
+        rewards.AddRange(cardAndOtherRewards);
+
+        Log.Info($"[MidRunJoin] HistoryBell built {rewards.Count} merged reward(s) for guest {guest.NetId}: gold={totalGold}, relics={relicRewards.Count}+{ancientChoiceCount} ancient(1-of-3), potions={potionRewards.Count}, upgrades={breakdown.CardUpgradeRewards}, removals={breakdown.CardRemovalRewards}, cards/other={cardAndOtherRewards.Count}");
         return rewards;
+    }
+
+    private static List<Reward> GenerateNativeCombatRoomRewards(
+        RunState state,
+        Player guest,
+        RoomType roomType,
+        ModelId? encounterId)
+    {
+        try
+        {
+            var encounter = ResolveEncounter(roomType, encounterId);
+            if (encounter != null && GenerateRewardsForMethod != null && RunManager.Instance != null)
+            {
+                var combatRoom = new CombatRoom(encounter.ToMutable(), state);
+                var rewardsSet = new RewardsSet(guest);
+                var generated = (List<Reward>)GenerateRewardsForMethod.Invoke(rewardsSet, [guest, combatRoom])!;
+                Hook.ModifyRewards(state, guest, generated, combatRoom);
+                return generated;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[MidRunJoin] Native room reward generation failed for {roomType} ({encounterId?.Entry ?? "default"}), using fallback: {ex.Message}");
+        }
+
+        // Fallback if RunManager.Instance is unavailable (e.g. detached offline tests)
+        var fallback = new List<Reward>();
+        var (minGold, maxGold) = roomType switch
+        {
+            RoomType.Elite => (HistoryBellFormula.EliteGoldMin, HistoryBellFormula.EliteGoldMaxExclusive - 1),
+            RoomType.Boss => (HistoryBellFormula.BossGoldMin, HistoryBellFormula.BossGoldMaxExclusive - 1),
+            _ => (HistoryBellFormula.MonsterGoldMin, HistoryBellFormula.MonsterGoldMaxExclusive - 1)
+        };
+        fallback.Add(new GoldReward(minGold, maxGold, guest));
+        fallback.Add(new CardReward(CardCreationOptions.ForRoom(guest, roomType).WithFlags(CardCreationFlags.IsFromCombat), 3, guest));
+        if (roomType == RoomType.Elite)
+            fallback.Add(new RelicReward(guest));
+        return fallback;
+    }
+
+    private static EncounterModel? ResolveEncounter(RoomType roomType, ModelId? encounterId)
+    {
+        if (encounterId != null)
+        {
+            try
+            {
+                var byId = SaveUtil.EncounterOrDeprecated(encounterId);
+                if (byId != null && byId.RoomType == roomType)
+                    return byId;
+            }
+            catch
+            {
+                // Fall through to room-type default.
+            }
+        }
+
+        return ModelDb.AllEncounters
+            .Where(e => e.RoomType == roomType)
+            .OrderBy(e => e.Id.Entry, StringComparer.Ordinal)
+            .FirstOrDefault();
     }
 
     public static AncientEventModel? ResolveAncient(ModelId? id)

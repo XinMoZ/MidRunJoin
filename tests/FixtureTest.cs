@@ -361,6 +361,34 @@ public static class FixtureTest
         Require(perPlayerMods.Count == 1 && perPlayerMods[0].Modifier is MegaCrit.Sts2.Core.Models.Modifiers.AllStar,
             $"Expected only AllStar as per-player startup modifier, got {perPlayerMods.Count}");
 
+        // Verify split-path mod safety: divergent entries visited ONLY by non-host player 2 (host 1 absent)
+        // must be ignored so catch-up strictly follows the host's route!
+        var splitRun = CloneRun(rich);
+        MapPointHistoryEntry MakeNonHostOnlyEntry(MapPointType mpt, RoomType rt, ModelId? modelId = null)
+        {
+            var e = new MapPointHistoryEntry { MapPointType = mpt };
+            e.Rooms.Add(new MapPointRoomHistoryEntry { RoomType = rt, ModelId = modelId });
+            e.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = 2 });
+            return e;
+        }
+        splitRun.MapPointHistory[0].Add(MakeNonHostOnlyEntry(MapPointType.Monster, RoomType.Monster));
+        splitRun.MapPointHistory[0].Add(MakeNonHostOnlyEntry(MapPointType.Elite, RoomType.Elite));
+        splitRun.MapPointHistory[0].Add(MakeNonHostOnlyEntry(MapPointType.Boss, RoomType.Boss));
+        splitRun.MapPointHistory[0].Add(MakeNonHostOnlyEntry(MapPointType.Treasure, RoomType.Treasure));
+        splitRun.MapPointHistory[0].Add(MakeNonHostOnlyEntry(MapPointType.RestSite, RoomType.RestSite));
+        splitRun.MapPointHistory[0].Add(MakeNonHostOnlyEntry(MapPointType.Ancient, RoomType.Event, neow.Id));
+
+        var splitCand = InvokePrepare(splitRun, [new GuestSpec(3, ModelDb.Character<Silent>())], null, HistoryBellCatchUpFlow.FlowId);
+        var splitState = RunState.FromSerializable(splitCand);
+        var hostCounts = CatchUpHistoryScanner.Scan(state1);
+        var splitCounts = CatchUpHistoryScanner.Scan(splitState);
+        Require(splitCounts == hostCounts,
+            $"Split-path scan diverged from host route: expected {hostCounts}, got {splitCounts}");
+        Require(CatchUpHistoryScanner.GetVisitedCombatRooms(splitState).Count == CatchUpHistoryScanner.GetVisitedCombatRooms(state1).Count,
+            "Split-path combat room list included non-host rooms");
+        Require(CatchUpHistoryScanner.GetVisitedAncientIds(splitState).Count == CatchUpHistoryScanner.GetVisitedAncientIds(state1).Count,
+            "Split-path ancient list included non-host ancients");
+
         // None flow
         var noneFlow = CatchUpRegistry.GetById(NoneCatchUpFlow.FlowId);
         Require(noneFlow.BuildRewards(state1, guest1).Count == 0, "NoneCatchUpFlow must produce 0 rewards");

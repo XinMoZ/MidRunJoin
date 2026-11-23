@@ -109,14 +109,20 @@ internal static class Candidate
                 }
                 candidate.Players.Add(serializedGuest);
 
-                // Ensure the latest MapPointHistoryEntry (CurrentMapPointHistoryEntry) has a PlayerStats slot
-                // for the newly added guest so native reward skipping/claiming (e.g. RelicReward.OnSkipped,
-                // CardReward.OnSkipped, MerchantRoom.Exit) never throws KeyNotFound/InvalidOperationException.
+                // Ensure both the latest MapPointHistoryEntry (CurrentMapPointHistoryEntry) and the host's
+                // latest entry (in case a split-path mod records separate per-player route entries) have a
+                // PlayerStats slot for the newly added guest.
                 var latestActHistory = candidate.MapPointHistory.LastOrDefault(act => act.Count > 0);
                 var latestEntry = latestActHistory?.LastOrDefault();
                 if (latestEntry != null && !latestEntry.PlayerStats.Any(ps => ps.PlayerId == spec.GuestId))
                 {
                     latestEntry.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = spec.GuestId });
+                }
+                var latestHostEntry = latestActHistory?.LastOrDefault(e => e.PlayerStats.Any(ps => ps.PlayerId == hostId));
+                if (latestHostEntry != null && !ReferenceEquals(latestHostEntry, latestEntry) &&
+                    !latestHostEntry.PlayerStats.Any(ps => ps.PlayerId == spec.GuestId))
+                {
+                    latestHostEntry.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = spec.GuestId });
                 }
             }
         }

@@ -52,9 +52,8 @@ public partial class Probe : Node
         _ = game.GetType("MegaCrit.Sts2.Core.Rewards.GoldReward", true)!;
         _ = game.GetType("MegaCrit.Sts2.Core.Rewards.CardReward", true)!;
         _ = game.GetType("MegaCrit.Sts2.Core.Rewards.RelicReward", true)!;
-        _ = game.GetType("MegaCrit.Sts2.Core.Rewards.CardUpgradeReward", true)!;
         _ = game.GetType("MegaCrit.Sts2.Core.Rewards.CardRemovalReward", true)!;
-        GD.Print("API SURFACE PASS: all 16 critical game APIs present");
+        GD.Print("API SURFACE PASS: all 15 critical game APIs present");
 
         // 2. Prepare every method body in MidRunJoin.dll (catches missing members / type-load errors)
         int prepared = 0;

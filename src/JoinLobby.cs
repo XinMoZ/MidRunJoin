@@ -101,7 +101,7 @@ internal static class JoinLobby
         if (!readResult.Success || readResult.SaveData == null)
         {
             Log.Warn($"[MidRunJoin] Failed to load multiplayer save from floating button (status={readResult.Status}).");
-            var popup = NErrorPopup.CreateForRunSave(readResult.Status);
+            var popup = Compat.CreateSaveErrorPopup(readResult.Status);
             if (popup != null && NModalContainer.Instance != null)
             {
                 NModalContainer.Instance.Add(popup);
@@ -997,7 +997,7 @@ internal static class JoinLobby
     private static void RequireRoster(LoadRunLobby __instance, ref bool __result)
     {
         if (__result && Expanded.TryGetValue(__instance.Run, out _))
-            __result = __instance.PlayerCount == __instance.Run.Players.Count &&
+            __result = Compat.GetLobbyPlayerCount(__instance) == __instance.Run.Players.Count &&
                        __instance.Run.Players.All(p => __instance.IsPlayerReady(p.NetId));
     }
 }

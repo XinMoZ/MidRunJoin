@@ -130,7 +130,7 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
 
         // 4. Card Upgrades (1 per 2 Rest Sites, floor)
         for (int i = 0; i < breakdown.CardUpgradeRewards; i++)
-            rewards.Add(new CardUpgradeReward(guest));
+            rewards.Add(Compat.CreateCardUpgradeReward(guest));
 
         // 5. Card Removals (1 per Boss defeated)
         for (int i = 0; i < breakdown.CardRemovalRewards; i++)
@@ -178,7 +178,7 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
             _ => (HistoryBellFormula.MonsterGoldMin, HistoryBellFormula.MonsterGoldMaxExclusive - 1)
         };
         fallback.Add(new GoldReward(minGold, maxGold, guest));
-        fallback.Add(new CardReward(CardCreationOptions.ForRoom(guest, roomType).WithFlags(CardCreationFlags.IsFromCombat), 3, guest));
+        fallback.Add(Compat.CreateCardReward(Compat.WithIsFromCombatIfSupported(CardCreationOptions.ForRoom(guest, roomType)), 3, guest));
         if (roomType == RoomType.Elite)
             fallback.Add(new RelicReward(guest));
         return fallback;

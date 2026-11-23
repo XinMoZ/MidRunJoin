@@ -87,7 +87,7 @@ internal static class Candidate
         {
             var existingHpSnapshot = candidate.Players.Select(p => (p.CurrentHp, p.MaxHp)).ToList();
             var state = RunState.FromSerializable(candidate);
-            var ascension = new AscensionManager(state.GameMode, state.AscensionLevel);
+            var ascension = Compat.CreateAscensionManager(state.GameMode, state.AscensionLevel);
             int seatOffset = candidate.Players.Count;
             for (int i = 0; i < addList.Count; i++)
             {
@@ -97,8 +97,7 @@ internal static class Candidate
                 ascension.ApplyEffectsTo(guest);
                 int syncedHp = CatchUpHealthFormula.ComputeSyncedCurrentHp(existingHpSnapshot, guest.Creature.MaxHp);
                 guest.Creature.SetCurrentHpInternal(syncedHp);
-                var seed = StringHelper.GetDeterministicHashCode(state.Rng.StringSeed) + (ulong)(seatOffset + i);
-                guest.PopulateRelicGrabBagIfNecessary(new Rng(seed, "MidRunJoin.Relics"));
+                guest.PopulateRelicGrabBagIfNecessary(Compat.CreateDeterministicRng(state.Rng.StringSeed, seatOffset + i, "MidRunJoin.Relics"));
                 var serializedGuest = guest.ToSerializable();
                 bool hasCatchUpFlow = !string.IsNullOrWhiteSpace(catchUpFlowId) &&
                     !catchUpFlowId.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase);

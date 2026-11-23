@@ -33,6 +33,7 @@ internal static class ModLoc
     // Modal header & buttons
     internal static string DialogTitle => Pick("调整联机成员", "Adjust Party Roster");
     internal static string PartyCountBadge(int count) => Pick($"{count} 人", $"{count} Players");
+    internal static string LocalModeBadge => Pick("本地联机", "Local LAN");
     internal static string DialogOkButton => Pick("建立调整后大厅", "Host Updated Lobby");
     internal static string DialogCancelButton => Pick("取消", "Cancel");
 
@@ -82,7 +83,8 @@ internal static class ModLoc
     internal static string SelectFriendHint => Pick("点击好友选择（双击直接添加）", "Click a friend to select (double-click to add)");
     internal static string SelectedFriendLabel(string name) => Pick($"已选择：{name}", $"Selected: {name}");
     internal static string NoFriendsMatch => Pick("没有匹配的 Steam 好友", "No matching Steam friends");
-    internal static string GuestIdPlaceholder => Pick("输入玩家编号", "Enter player number");
+    internal static string ManualSteamIdPlaceholder => Pick("或直接输入非好友 SteamID...", "Or enter a non-friend SteamID...");
+    internal static string GuestIdPlaceholder => Pick("输入玩家编号（如 3）", "Enter player ID (e.g. 3)");
     internal static string RandomCharacterOption => Pick("随机", "Random");
     internal static string AddGuestButton => Pick("＋ 添加", "+ Add");
     internal static string CatchUpLabel => Pick("补给方式：", "Mode:");

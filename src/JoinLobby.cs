@@ -128,7 +128,7 @@ internal static class JoinLobby
         int randomCharIndex = characters.Length;
         var flows = CatchUpRegistry.All;
         ulong hostId = run.Players.Count > 0 ? run.Players[0].NetId : 0;
-        bool isSteamMode = SteamHelper.IsSteamReady;
+        bool isSteamMode = SteamHelper.IsSteamReady && !CommandLineHelper.HasArg("fastmp");
 
         // Full-screen vanilla modal overlay with dark backstop
         var modalRoot = new Control
@@ -157,7 +157,7 @@ internal static class JoinLobby
 
         int existingHeight = Math.Clamp(run.Players.Count * 46 + 8, 92, 196);
         int extraExisting = Math.Max(0, existingHeight - 92);
-        int targetHeight = Math.Min((isSteamMode ? 680 : 530) + extraExisting, 780);
+        int targetHeight = Math.Min((isSteamMode ? 720 : 530) + extraExisting, 810);
         int targetWidth = 720;
 
         var panel = new PanelContainer
@@ -198,6 +198,15 @@ internal static class JoinLobby
         };
         VanillaUi.ApplyFont(titleLabel, FontType.Bold, 26, StsColors.gold, outlineSize: 4);
         headerRow.AddChild(titleLabel);
+
+        if (!isSteamMode)
+        {
+            headerRow.AddChild(VanillaUi.CreateBadgePill(
+                ModLoc.LocalModeBadge,
+                new Color(0.12f, 0.22f, 0.28f, 0.95f),
+                StsColors.blue,
+                fontSize: 13));
+        }
 
         var partyCountBadge = VanillaUi.CreateBadgePill(
             ModLoc.PartyCountBadge(run.Players.Count),
@@ -246,6 +255,7 @@ internal static class JoinLobby
 
         // Friend selection state (Steam mode)
         LineEdit? friendSearch = null;
+        LineEdit? manualSteamIdInput = null;
         CheckBox? onlineOnlyCheck = null;
         Label? friendCountLabel = null;
         VBoxContainer? friendListBox = null;
@@ -371,6 +381,8 @@ internal static class JoinLobby
                     lastFriendClickMs = now;
 
                     selectedFriend = entry;
+                    if (manualSteamIdInput != null && !string.IsNullOrEmpty(manualSteamIdInput.Text))
+                        manualSteamIdInput.Text = "";
                     UpdateSelectedFriendLabel();
                     if (isDoubleClick)
                     {
@@ -553,6 +565,26 @@ internal static class JoinLobby
 
             friendSearch.TextChanged += _ => PopulateFriendList();
             onlineOnlyCheck.Toggled += _ => PopulateFriendList();
+
+            // Optional manual SteamID input for non-friends
+            manualSteamIdInput = new LineEdit
+            {
+                Name = "ManualSteamIdInput",
+                PlaceholderText = ModLoc.ManualSteamIdPlaceholder,
+                ClearButtonEnabled = true,
+                SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
+            };
+            VanillaUi.StyleLineEdit(manualSteamIdInput, 14);
+            manualSteamIdInput.TextChanged += text =>
+            {
+                if (!string.IsNullOrWhiteSpace(text) && selectedFriend.HasValue)
+                {
+                    selectedFriend = null;
+                    UpdateSelectedFriendLabel();
+                    PopulateFriendList();
+                }
+            };
+            addSection.AddChild(manualSteamIdInput);
         }
 
         // Character selector + Add action row
@@ -724,13 +756,25 @@ internal static class JoinLobby
             string displayName;
             if (isSteamMode)
             {
-                if (!selectedFriend.HasValue)
+                if (manualSteamIdInput != null && !string.IsNullOrWhiteSpace(manualSteamIdInput.Text))
+                {
+                    if (!TryParseGuestId(manualSteamIdInput.Text, out id))
+                    {
+                        SetStatusMessage(ModLoc.ErrInvalidPlayerId, isError: true);
+                        return false;
+                    }
+                    displayName = SteamHelper.FormatPlayerIdentity(id, SteamHelper.TryGetPlayerName(id));
+                }
+                else if (selectedFriend.HasValue)
+                {
+                    id = selectedFriend.Value.SteamId;
+                    displayName = selectedFriend.Value.Name;
+                }
+                else
                 {
                     SetStatusMessage(ModLoc.ErrSelectFriendFirst, isError: true);
                     return false;
                 }
-                id = selectedFriend.Value.SteamId;
-                displayName = selectedFriend.Value.Name;
             }
             else
             {
@@ -757,6 +801,8 @@ internal static class JoinLobby
             if (isSteamMode)
             {
                 selectedFriend = null;
+                if (manualSteamIdInput != null)
+                    manualSteamIdInput.Text = "";
                 UpdateSelectedFriendLabel();
             }
             else if (input != null)
@@ -871,7 +917,8 @@ internal static class JoinLobby
         {
             if (isSteamMode)
             {
-                if (selectedFriend.HasValue && !TryAddCurrentSelection())
+                bool hasManualId = manualSteamIdInput != null && !string.IsNullOrWhiteSpace(manualSteamIdInput.Text);
+                if ((selectedFriend.HasValue || hasManualId) && !TryAddCurrentSelection())
                     return;
             }
             else if (input != null && !string.IsNullOrWhiteSpace(input.Text))

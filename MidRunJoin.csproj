@@ -2,7 +2,7 @@
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <Nullable>enable</Nullable>
-    <Version>0.2.0</Version>
+    <Version>0.4.0</Version>
     <GameDir Condition="'$(GameDir)' == ''">E:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</GameDir>
     <GameData>$(GameDir)/data_sts2_windows_x86_64</GameData>
   </PropertyGroup>
@@ -11,6 +11,7 @@
     <Compile Remove="tests/**/*.cs" />
     <Reference Include="0Harmony" HintPath="$(GameData)/0Harmony.dll" Private="false" />
     <Reference Include="GodotSharp" HintPath="$(GameData)/GodotSharp.dll" Private="false" />
+    <Reference Include="Steamworks.NET" HintPath="$(GameData)/Steamworks.NET.dll" Private="false" />
     <Reference Include="sts2" HintPath="$(GameData)/sts2.dll" Private="false" />
   </ItemGroup>
 

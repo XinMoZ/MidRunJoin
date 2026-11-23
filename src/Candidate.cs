@@ -1,45 +1,124 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using MegaCrit.Sts2.Core.Entities.Ascension;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Helpers;
-using MegaCrit.Sts2.Core.Map;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Random;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Runs.History;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Unlocks;
+using MidRunJoin.CatchUp;
 
 namespace MidRunJoin;
 
+public readonly record struct GuestSpec(ulong GuestId, CharacterModel Character);
+
 internal static class Candidate
 {
-    internal static SerializableRun Prepare(SerializableRun checkpoint, ulong guestId)
+    internal static SerializableRun Prepare(SerializableRun checkpoint, ulong guestId) =>
+        Prepare(checkpoint, [new GuestSpec(guestId, ModelDb.Character<Ironclad>())], null, null);
+
+    internal static SerializableRun Prepare(SerializableRun checkpoint, ulong guestId, CharacterModel character) =>
+        Prepare(checkpoint, [new GuestSpec(guestId, character)], null, null);
+
+    internal static SerializableRun Prepare(
+        SerializableRun checkpoint,
+        IReadOnlyList<GuestSpec> guests,
+        IReadOnlyCollection<ulong>? removedPlayerIds = null,
+        string? catchUpFlowId = null)
     {
         if (RunManager.Instance.IsInProgress || checkpoint.GameMode != GameMode.Standard ||
             checkpoint.IsCustomGame || checkpoint.DailyTime.HasValue || checkpoint.Modifiers.Count > 0)
-            throw new InvalidOperationException("请先退出冒险，并选择标准联机存档。");
-        if (checkpoint.Players.Count is < 1 or >= 4)
-            throw new InvalidOperationException("本局没有可用席位。");
-        if (checkpoint.Players.Any(p => p.NetId == guestId))
-            throw new InvalidOperationException("这位玩家已在队伍中，可以直接重连。");
-        var map = checkpoint.Acts.ElementAtOrDefault(checkpoint.CurrentActIndex)?.SavedMap;
-        if (checkpoint.PreFinishedRoom != null || checkpoint.VisitedMapCoords.Count == 0 ||
-            map?.Points.Any(p => p.Coord.Equals(checkpoint.VisitedMapCoords[^1]) &&
-                                 p.PointType == MapPointType.Monster) != true)
-            throw new InvalidOperationException("请在进入普通怪物节点后、出牌前退出到主菜单。");
+            throw new InvalidOperationException(ModLoc.ErrRequireStandardRun);
+        if (checkpoint.Players.Count < 1)
+            throw new InvalidOperationException(ModLoc.ErrEmptySave);
+
+        var addList = guests ?? Array.Empty<GuestSpec>();
+        var removeSet = removedPlayerIds != null ? new HashSet<ulong>(removedPlayerIds) : new HashSet<ulong>();
+
+        if (addList.Count == 0 && removeSet.Count == 0)
+            throw new InvalidOperationException(ModLoc.ErrNoRosterDelta);
+
+        ulong hostId = checkpoint.Players[0].NetId;
+        if (removeSet.Contains(hostId))
+            throw new InvalidOperationException(ModLoc.ErrCannotRemoveHost);
+
+        var existingIds = new HashSet<ulong>(checkpoint.Players.Select(p => p.NetId));
+        foreach (ulong rid in removeSet)
+        {
+            if (!existingIds.Contains(rid))
+                throw new InvalidOperationException(ModLoc.ErrPlayerNotInSave(rid));
+        }
+
+        var remainingIds = new HashSet<ulong>(checkpoint.Players.Where(p => !removeSet.Contains(p.NetId)).Select(p => p.NetId));
+        if (remainingIds.Count == 0)
+            throw new InvalidOperationException(ModLoc.ErrNeedOneRemaining);
+
+        foreach (var guest in addList)
+        {
+            if (guest.GuestId == 0)
+                throw new InvalidOperationException(ModLoc.ErrZeroPlayerId);
+            if (!remainingIds.Add(guest.GuestId))
+                throw new InvalidOperationException(ModLoc.ErrGuestAlreadyInParty(guest.GuestId));
+        }
 
         var type = JsonSerializationUtility.GetTypeInfo<SerializableRun>();
         var candidate = JsonSerializer.Deserialize(JsonSerializer.SerializeToUtf8Bytes(checkpoint, type), type)!;
-        var state = RunState.FromSerializable(candidate);
-        var guest = Player.CreateForNewRun<Ironclad>(UnlockState.none, guestId);
-        // Only the detached state gets a seat, seeded player streams and a boundary history entry.
-        state.AddPlayerDebug(guest, -1);
-        new AscensionManager(state.GameMode, state.AscensionLevel).ApplyEffectsTo(guest);
-        var seed = StringHelper.GetDeterministicHashCode(state.Rng.StringSeed) + (ulong)checkpoint.Players.Count;
-        guest.PopulateRelicGrabBagIfNecessary(new Rng(seed, "MidRunJoin.Relics"));
-        candidate.Players.Add(guest.ToSerializable());
+
+        // 1. Apply removals (preserve original seat order of remaining players)
+        if (removeSet.Count > 0)
+        {
+            candidate.Players.RemoveAll(p => removeSet.Contains(p.NetId));
+            if (candidate.PreFinishedRoom?.ExtraRewards != null)
+            {
+                foreach (ulong rid in removeSet)
+                    candidate.PreFinishedRoom.ExtraRewards.Remove(rid);
+            }
+        }
+
+        // 2. Apply additions on a detached RunState so original players' RNG & shared relic bag remain untouched
+        if (addList.Count > 0)
+        {
+            var existingHpSnapshot = candidate.Players.Select(p => (p.CurrentHp, p.MaxHp)).ToList();
+            var state = RunState.FromSerializable(candidate);
+            var ascension = new AscensionManager(state.GameMode, state.AscensionLevel);
+            int seatOffset = candidate.Players.Count;
+            for (int i = 0; i < addList.Count; i++)
+            {
+                var spec = addList[i];
+                var guest = Player.CreateForNewRun(spec.Character, UnlockState.none, spec.GuestId);
+                state.AddPlayerDebug(guest, -1);
+                ascension.ApplyEffectsTo(guest);
+                int syncedHp = CatchUpHealthFormula.ComputeSyncedCurrentHp(existingHpSnapshot, guest.Creature.MaxHp);
+                guest.Creature.SetCurrentHpInternal(syncedHp);
+                var seed = StringHelper.GetDeterministicHashCode(state.Rng.StringSeed) + (ulong)(seatOffset + i);
+                guest.PopulateRelicGrabBagIfNecessary(new Rng(seed, "MidRunJoin.Relics"));
+                var serializedGuest = guest.ToSerializable();
+                if (!string.IsNullOrWhiteSpace(catchUpFlowId) &&
+                    !catchUpFlowId.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase) &&
+                    serializedGuest.Relics.Count > 0)
+                {
+                    serializedGuest.Relics[0].FloorAddedToDeck = CatchUpCoordinator.EncodeFlowMarker(catchUpFlowId);
+                }
+                candidate.Players.Add(serializedGuest);
+
+                // Ensure the latest MapPointHistoryEntry (CurrentMapPointHistoryEntry) has a PlayerStats slot
+                // for the newly added guest so native reward skipping/claiming (e.g. RelicReward.OnSkipped,
+                // CardReward.OnSkipped, MerchantRoom.Exit) never throws KeyNotFound/InvalidOperationException.
+                var latestActHistory = candidate.MapPointHistory.LastOrDefault(act => act.Count > 0);
+                var latestEntry = latestActHistory?.LastOrDefault();
+                if (latestEntry != null && !latestEntry.PlayerStats.Any(ps => ps.PlayerId == spec.GuestId))
+                {
+                    latestEntry.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = spec.GuestId });
+                }
+            }
+        }
+
         return candidate;
     }
 }

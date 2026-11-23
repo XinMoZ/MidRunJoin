@@ -7,9 +7,12 @@
     <GameData>$(GameDir)/data_sts2_windows_x86_64</GameData>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="UnitTests/**/*.cs" />
+    <Compile Remove="compat/**/*.cs" />
     <Reference Include="sts2" HintPath="$(GameData)/sts2.dll" Private="false" />
     <Reference Include="0Harmony" HintPath="$(GameData)/0Harmony.dll" Private="false" />
     <Reference Include="GodotSharp" HintPath="$(GameData)/GodotSharp.dll" Private="false" />
+    <Reference Include="MidRunJoin" HintPath="../bin/Release/net9.0/MidRunJoin.dll" Private="false" />
     <None Update="MidRunJoinSmoke.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

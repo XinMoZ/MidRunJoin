@@ -93,6 +93,7 @@ public partial class Probe : Node
         [
             "LoadRunLobby.IsAboutToBeginGame",
             "MapPointHistoryEntry.GetEntry",
+            "NCustomRunLoadScreen.InitializeAsHost",
             "NGame.LoadRun",
             "NMapPointHistoryHoverTip.Create",
             "NMultiplayerLoadGameScreen.InitializeAsHost",

@@ -32,9 +32,10 @@ internal static class Candidate
         IReadOnlyCollection<ulong>? removedPlayerIds = null,
         string? catchUpFlowId = null)
     {
-        if (RunManager.Instance.IsInProgress || checkpoint.GameMode != GameMode.Standard ||
-            checkpoint.IsCustomGame || checkpoint.DailyTime.HasValue || checkpoint.Modifiers.Count > 0)
-            throw new InvalidOperationException(ModLoc.ErrRequireStandardRun);
+        if (RunManager.Instance.IsInProgress)
+            throw new InvalidOperationException(ModLoc.ErrExitRunFirst);
+        if (checkpoint.GameMode == GameMode.Daily || checkpoint.DailyTime.HasValue)
+            throw new InvalidOperationException(ModLoc.ErrDailyNotSupported);
         if (checkpoint.Players.Count < 1)
             throw new InvalidOperationException(ModLoc.ErrEmptySave);
 
@@ -99,11 +100,12 @@ internal static class Candidate
                 var seed = StringHelper.GetDeterministicHashCode(state.Rng.StringSeed) + (ulong)(seatOffset + i);
                 guest.PopulateRelicGrabBagIfNecessary(new Rng(seed, "MidRunJoin.Relics"));
                 var serializedGuest = guest.ToSerializable();
-                if (!string.IsNullOrWhiteSpace(catchUpFlowId) &&
-                    !catchUpFlowId.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase) &&
-                    serializedGuest.Relics.Count > 0)
+                bool hasCatchUpFlow = !string.IsNullOrWhiteSpace(catchUpFlowId) &&
+                    !catchUpFlowId.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase);
+                if ((hasCatchUpFlow || candidate.Modifiers.Count > 0) && serializedGuest.Relics.Count > 0)
                 {
-                    serializedGuest.Relics[0].FloorAddedToDeck = CatchUpCoordinator.EncodeFlowMarker(catchUpFlowId);
+                    string markerFlow = hasCatchUpFlow ? catchUpFlowId! : NoneCatchUpFlow.FlowId;
+                    serializedGuest.Relics[0].FloorAddedToDeck = CatchUpCoordinator.EncodeFlowMarker(markerFlow);
                 }
                 candidate.Players.Add(serializedGuest);
 

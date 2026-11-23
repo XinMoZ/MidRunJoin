@@ -243,6 +243,8 @@ internal static class VanillaUi
         return rect;
     }
 
+    private const string RandomCharacterIconPath = "res://images/ui/top_panel/character_icon_random_character.png";
+
     internal static void SetCharacterIconTexture(TextureRect rect, CharacterModel? character)
     {
         if (character == null)
@@ -253,6 +255,20 @@ internal static class VanillaUi
         try
         {
             rect.Texture = character.IconTexture;
+        }
+        catch
+        {
+            rect.Texture = null;
+        }
+    }
+
+    internal static void SetRandomCharacterIconTexture(TextureRect rect)
+    {
+        try
+        {
+            rect.Texture = ResourceLoader.Exists(RandomCharacterIconPath)
+                ? ResourceLoader.Load<Texture2D>(RandomCharacterIconPath, null, ResourceLoader.CacheMode.Reuse)
+                : null;
         }
         catch
         {

@@ -83,6 +83,7 @@ internal static class ModLoc
     internal static string SelectedFriendLabel(string name) => Pick($"已选择：{name}", $"Selected: {name}");
     internal static string NoFriendsMatch => Pick("没有匹配的 Steam 好友", "No matching Steam friends");
     internal static string GuestIdPlaceholder => Pick("输入玩家编号", "Enter player number");
+    internal static string RandomCharacterOption => Pick("随机", "Random");
     internal static string AddGuestButton => Pick("＋ 添加", "+ Add");
     internal static string CatchUpLabel => Pick("补给方式：", "Mode:");
 
@@ -109,9 +110,12 @@ internal static class ModLoc
         "Failed to update party roster. Please check the game log.");
 
     // Candidate validation errors
-    internal static string ErrRequireStandardRun => Pick(
-        "请先退出冒险，并选择标准联机存档。",
-        "Please exit the current run and select a standard multiplayer save.");
+    internal static string ErrExitRunFirst => Pick(
+        "请先退出当前冒险后再调整联机成员。",
+        "Please exit the current run before adjusting the party roster.");
+    internal static string ErrDailyNotSupported => Pick(
+        "每日挑战存档不支持中途调整成员。",
+        "Mid-run roster changes are not supported in Daily Runs.");
     internal static string ErrEmptySave => Pick(
         "存档中没有任何玩家。",
         "The save file contains no players.");

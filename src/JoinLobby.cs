@@ -14,6 +14,7 @@ using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
+using MegaCrit.Sts2.Core.Nodes.Screens.CustomRun;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Platform.Steam;
@@ -26,6 +27,7 @@ namespace MidRunJoin;
 internal static class JoinLobby
 {
     internal sealed record ExpandedSession(ulong[] GuestIds, string FlowId);
+    private readonly record struct QueuedGuest(ulong GuestId, CharacterModel? Character);
 
     internal const string FloatingButtonName = "MidRunJoinOverlayButton";
     internal const string RosterModalName = "MidRunJoinRosterModal";
@@ -119,10 +121,11 @@ internal static class JoinLobby
             existingModal.QueueFree();
         }
 
-        var queued = new List<GuestSpec>();
+        var queued = new List<QueuedGuest>();
         var queuedNames = new Dictionary<ulong, string>();
         var removedIds = new HashSet<ulong>();
         var characters = ModelDb.AllCharacters.ToArray();
+        int randomCharIndex = characters.Length;
         var flows = CatchUpRegistry.All;
         ulong hostId = run.Players.Count > 0 ? run.Players[0].NetId : 0;
         bool isSteamMode = SteamHelper.IsSteamReady;
@@ -597,11 +600,14 @@ internal static class JoinLobby
         };
         foreach (var c in characters)
             picker.AddItem(CharacterName(c));
+        picker.AddItem(ModLoc.RandomCharacterOption);
         picker.Selected = 0;
         VanillaUi.StyleOptionButton(picker, 14);
         picker.ItemSelected += idx =>
         {
-            if (idx >= 0 && idx < characters.Length)
+            if (idx == randomCharIndex)
+                VanillaUi.SetRandomCharacterIconTexture(pickerCharIcon);
+            else if (idx >= 0 && idx < characters.Length)
                 VanillaUi.SetCharacterIconTexture(pickerCharIcon, characters[(int)idx]);
         };
         inputRow.AddChild(picker);
@@ -673,11 +679,15 @@ internal static class JoinLobby
                 row.AddThemeConstantOverride("separation", 8);
                 rowCard.AddChild(row);
 
-                row.AddChild(VanillaUi.CreateCharacterIcon(g.Character, 24));
+                var rowIcon = VanillaUi.CreateCharacterIcon(g.Character, 24);
+                if (g.Character == null)
+                    VanillaUi.SetRandomCharacterIconTexture(rowIcon);
+                row.AddChild(rowIcon);
 
+                string charLabel = g.Character != null ? CharacterName(g.Character) : ModLoc.RandomCharacterOption;
                 var nameLbl = new Label
                 {
-                    Text = $"{displayName}  ·  {CharacterName(g.Character)}",
+                    Text = $"{displayName}  ·  {charLabel}",
                     SizeFlagsHorizontal = Control.SizeFlags.ExpandFill,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -739,7 +749,10 @@ internal static class JoinLobby
                 return false;
             }
 
-            queued.Add(new GuestSpec(id, characters[Math.Max(0, picker.Selected)]));
+            CharacterModel? chosenChar = picker.Selected == randomCharIndex
+                ? null
+                : characters[Math.Clamp(picker.Selected, 0, characters.Length - 1)];
+            queued.Add(new QueuedGuest(id, chosenChar));
             queuedNames[id] = displayName;
             if (isSteamMode)
             {
@@ -875,7 +888,12 @@ internal static class JoinLobby
             try
             {
                 string flowId = queued.Count > 0 ? flows[Math.Max(0, flowPicker.Selected)].Id : NoneCatchUpFlow.FlowId;
-                StartExpandedLobby(__instance, run, queued.ToArray(), flowId, removedIds.ToArray());
+                var resolvedGuests = queued
+                    .Select(g => new GuestSpec(
+                        g.GuestId,
+                        g.Character ?? characters[Random.Shared.Next(characters.Length)]))
+                    .ToArray();
+                StartExpandedLobby(__instance, run, resolvedGuests, flowId, removedIds.ToArray());
                 CloseModal();
             }
             catch (Exception ex)
@@ -956,6 +974,17 @@ internal static class JoinLobby
 
     [HarmonyPostfix, HarmonyPatch(typeof(NMultiplayerLoadGameScreen), nameof(NMultiplayerLoadGameScreen.InitializeAsHost))]
     private static void OnExpandedHostLobbyCreated(INetGameService gameService, SerializableRun run)
+    {
+        SendExpandedSteamInvites(gameService, run);
+    }
+
+    [HarmonyPostfix, HarmonyPatch(typeof(NCustomRunLoadScreen), nameof(NCustomRunLoadScreen.InitializeAsHost))]
+    private static void OnExpandedCustomHostLobbyCreated(INetGameService gameService, SerializableRun run)
+    {
+        SendExpandedSteamInvites(gameService, run);
+    }
+
+    private static void SendExpandedSteamInvites(INetGameService gameService, SerializableRun run)
     {
         if (Expanded.TryGetValue(run, out var session))
         {

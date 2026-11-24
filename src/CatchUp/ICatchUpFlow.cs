@@ -22,6 +22,7 @@ public interface ICatchUpFlow
     string DisplayName { get; }
     string Description { get; }
     List<Reward> BuildRewards(RunState state, Player guest);
+    List<Reward> BuildDeltaRewards(RunState state, Player guest) => BuildRewards(state, guest);
 }
 
 public static class CatchUpHistoryScanner
@@ -31,10 +32,15 @@ public static class CatchUpHistoryScanner
     /// When a split-path mod allows teammates to visit different rooms, entries that contain
     /// player stats but do not include the host's NetId are excluded so catch-up rewards
     /// strictly follow the host's path instead of double-counting divergent teammate rooms.
+    /// When <paramref name="excludePlayerPresentId"/> is specified (for a restored stashed player),
+    /// floors where that player already participated are skipped so only the missed delta rooms remain.
     /// </summary>
-    public static IEnumerable<(int ActIndex, MegaCrit.Sts2.Core.Runs.History.MapPointHistoryEntry Entry)> EnumerateHostHistoryEntries(RunState state)
+    public static IEnumerable<(int ActIndex, MegaCrit.Sts2.Core.Runs.History.MapPointHistoryEntry Entry)> EnumerateHostHistoryEntries(
+        RunState state,
+        ulong? excludePlayerPresentId = null)
     {
         ulong hostId = state.Players.Count > 0 ? state.Players[0].NetId : 0;
+        var hostEntries = new List<(int ActIndex, MegaCrit.Sts2.Core.Runs.History.MapPointHistoryEntry Entry)>();
         for (int actIdx = 0; actIdx < state.MapPointHistory.Count; actIdx++)
         {
             foreach (var entry in state.MapPointHistory[actIdx])
@@ -45,15 +51,41 @@ public static class CatchUpHistoryScanner
                 {
                     continue;
                 }
-                yield return (actIdx, entry);
+                hostEntries.Add((actIdx, entry));
             }
+        }
+
+        if (!excludePlayerPresentId.HasValue)
+        {
+            foreach (var item in hostEntries)
+                yield return item;
+            yield break;
+        }
+
+        // For a restored (stashed) player, only include host floors strictly AFTER the last floor
+        // they participated in before rejoining (excluding floors prior to their original join as well
+        // as any floor where their PlayerId is already present, including the current rejoin boundary).
+        ulong pid = excludePlayerPresentId.Value;
+        int lastPresentBeforeRejoin = -1;
+        for (int i = 0; i < hostEntries.Count - 1; i++)
+        {
+            if (hostEntries[i].Entry.PlayerStats.Any(ps => ps.PlayerId == pid))
+                lastPresentBeforeRejoin = i;
+        }
+
+        int startIdx = lastPresentBeforeRejoin + 1;
+        for (int i = startIdx; i < hostEntries.Count; i++)
+        {
+            if (hostEntries[i].Entry.PlayerStats.Any(ps => ps.PlayerId == pid))
+                continue;
+            yield return hostEntries[i];
         }
     }
 
     /// <summary>
     /// Counts all completed rooms recorded along the host's route in <see cref="RunState.MapPointHistory"/>.
     /// </summary>
-    public static CatchUpRoomCounts Scan(RunState state)
+    public static CatchUpRoomCounts Scan(RunState state, ulong? excludePlayerPresentId = null)
     {
         int monsters = 0;
         int elites = 0;
@@ -63,7 +95,7 @@ public static class CatchUpHistoryScanner
         int rests = 0;
         int ancients = 0;
 
-        foreach (var (_, entry) in EnumerateHostHistoryEntries(state))
+        foreach (var (_, entry) in EnumerateHostHistoryEntries(state, excludePlayerPresentId))
         {
             switch (entry.MapPointType)
             {
@@ -103,8 +135,8 @@ public static class CatchUpHistoryScanner
             }
         }
 
-        // Standard Act 1 runs start with Neow; if history did not explicitly record an Ancient entry, count it once.
-        if (ancients == 0 && state.ExtraFields.StartedWithNeow)
+        // Standard Act 1 runs start with Neow; only apply fallback for fresh guests (not restored players).
+        if (!excludePlayerPresentId.HasValue && ancients == 0 && state.ExtraFields.StartedWithNeow)
             ancients = 1;
 
         return new CatchUpRoomCounts(
@@ -121,10 +153,10 @@ public static class CatchUpHistoryScanner
     /// Returns the ordered list of specific Ancient <see cref="ModelId"/>s visited along the host's route in
     /// <see cref="RunState.MapPointHistory"/> (or <c>null</c> if a history entry lacked a ModelId).
     /// </summary>
-    public static IReadOnlyList<ModelId?> GetVisitedAncientIds(RunState state)
+    public static IReadOnlyList<ModelId?> GetVisitedAncientIds(RunState state, ulong? excludePlayerPresentId = null)
     {
         var ids = new List<ModelId?>();
-        foreach (var (actIdx, entry) in EnumerateHostHistoryEntries(state))
+        foreach (var (actIdx, entry) in EnumerateHostHistoryEntries(state, excludePlayerPresentId))
         {
             if (entry.MapPointType != MapPointType.Ancient)
                 continue;
@@ -134,7 +166,7 @@ public static class CatchUpHistoryScanner
             ids.Add(modelId);
         }
 
-        if (ids.Count == 0 && state.ExtraFields.StartedWithNeow)
+        if (!excludePlayerPresentId.HasValue && ids.Count == 0 && state.ExtraFields.StartedWithNeow)
             ids.Add(ModelDb.Event<Neow>().Id);
 
         return ids;
@@ -145,10 +177,12 @@ public static class CatchUpHistoryScanner
     /// <see cref="RunState.MapPointHistory"/> along with their recorded <see cref="EncounterModel"/> ID (if present),
     /// so catch-up reward generation can invoke STS2's native room reward drop logic for each visited combat.
     /// </summary>
-    public static List<(RoomType RoomType, ModelId? EncounterId)> GetVisitedCombatRooms(RunState state)
+    public static List<(RoomType RoomType, ModelId? EncounterId)> GetVisitedCombatRooms(
+        RunState state,
+        ulong? excludePlayerPresentId = null)
     {
         var combats = new List<(RoomType, ModelId?)>();
-        foreach (var (_, entry) in EnumerateHostHistoryEntries(state))
+        foreach (var (_, entry) in EnumerateHostHistoryEntries(state, excludePlayerPresentId))
         {
             RoomType? resolvedType = entry.MapPointType switch
             {

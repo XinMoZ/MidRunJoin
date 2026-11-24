@@ -28,23 +28,37 @@ namespace MidRunJoin.CatchUp;
 public static class CatchUpCoordinator
 {
     private const int MarkerBase = 240;
+    private const int RestoredMarkerBase = 248;
 
-    public static int EncodeFlowMarker(string flowId) =>
-        MarkerBase + CatchUpRegistry.GetIndexById(flowId);
+    public static int EncodeFlowMarker(string flowId, bool isRestored = false) =>
+        (isRestored ? RestoredMarkerBase : MarkerBase) + CatchUpRegistry.GetIndexById(flowId);
 
-    public static bool TryConsumeMarker(Player player, out string flowId)
+    public static bool TryConsumeMarker(Player player, out string flowId) =>
+        TryConsumeMarker(player, out flowId, out _);
+
+    public static bool TryConsumeMarker(Player player, out string flowId, out bool isRestored)
     {
         foreach (var relic in player.Relics)
         {
+            if (relic.FloorAddedToDeck >= RestoredMarkerBase)
+            {
+                int idx = relic.FloorAddedToDeck - RestoredMarkerBase;
+                relic.FloorAddedToDeck = 1;
+                flowId = CatchUpRegistry.GetByIndex(idx).Id;
+                isRestored = true;
+                return true;
+            }
             if (relic.FloorAddedToDeck >= MarkerBase)
             {
                 int idx = relic.FloorAddedToDeck - MarkerBase;
                 relic.FloorAddedToDeck = 1;
                 flowId = CatchUpRegistry.GetByIndex(idx).Id;
+                isRestored = false;
                 return true;
             }
         }
         flowId = "";
+        isRestored = false;
         return false;
     }
 
@@ -64,11 +78,11 @@ public static class CatchUpCoordinator
                 return;
 
             // Offer in deterministic seat order on every peer so synchronizers stay 100% aligned.
-            var pending = new List<(Player Guest, string FlowId)>();
+            var pending = new List<(Player Guest, string FlowId, bool IsRestored)>();
             foreach (var player in state.Players)
             {
-                if (TryConsumeMarker(player, out string flowId))
-                    pending.Add((player, flowId));
+                if (TryConsumeMarker(player, out string flowId, out bool isRestored))
+                    pending.Add((player, flowId, isRestored));
             }
 
             if (pending.Count == 0)
@@ -84,22 +98,26 @@ public static class CatchUpCoordinator
 
     private static async Task RunAllPendingGuestCatchUpsAsync(
         RunState state,
-        List<(Player Guest, string FlowId)> pending)
+        List<(Player Guest, string FlowId, bool IsRestored)> pending)
     {
-        foreach (var (guest, flowId) in pending)
+        foreach (var (guest, flowId, isRestored) in pending)
         {
             try
             {
-                await ApplyPerPlayerRunStartModifiersAsync(state, guest);
+                // Only fresh guests trigger one-time run-start modifiers; restored stashed players already ran them.
+                if (!isRestored)
+                    await ApplyPerPlayerRunStartModifiersAsync(state, guest);
 
                 var flow = CatchUpRegistry.GetById(flowId);
-                var rewards = flow.BuildRewards(state, guest);
+                var rewards = isRestored
+                    ? flow.BuildDeltaRewards(state, guest)
+                    : flow.BuildRewards(state, guest);
                 if (rewards.Count == 0)
                 {
-                    Log.Info($"[MidRunJoin] CatchUp flow '{flow.Id}' produced 0 rewards for guest {guest.NetId}.");
+                    Log.Info($"[MidRunJoin] CatchUp flow '{flow.Id}' (restored={isRestored}) produced 0 rewards for guest {guest.NetId}.");
                     continue;
                 }
-                Log.Info($"[MidRunJoin] Offering {rewards.Count} merged catch-up reward(s) to guest {guest.NetId} (flow={flow.Id}).");
+                Log.Info($"[MidRunJoin] Offering {rewards.Count} merged catch-up reward(s) to guest {guest.NetId} (flow={flow.Id}, restored={isRestored}).");
                 _ = TaskHelper.RunSafely(RewardsCmd.OfferCustom(guest, rewards));
             }
             catch (Exception ex)

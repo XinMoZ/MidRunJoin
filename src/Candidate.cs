@@ -11,12 +11,16 @@ using MegaCrit.Sts2.Core.Random;
 using MegaCrit.Sts2.Core.Runs;
 using MegaCrit.Sts2.Core.Runs.History;
 using MegaCrit.Sts2.Core.Saves;
+using MegaCrit.Sts2.Core.Saves.Runs;
 using MegaCrit.Sts2.Core.Unlocks;
 using MidRunJoin.CatchUp;
 
 namespace MidRunJoin;
 
-public readonly record struct GuestSpec(ulong GuestId, CharacterModel Character);
+public readonly record struct GuestSpec(
+    ulong GuestId,
+    CharacterModel Character,
+    SerializablePlayer? RestoredPlayer = null);
 
 internal static class Candidate
 {
@@ -92,19 +96,35 @@ internal static class Candidate
             for (int i = 0; i < addList.Count; i++)
             {
                 var spec = addList[i];
-                var guest = Player.CreateForNewRun(spec.Character, UnlockState.none, spec.GuestId);
-                state.AddPlayerDebug(guest, -1);
-                ascension.ApplyEffectsTo(guest);
-                int syncedHp = CatchUpHealthFormula.ComputeSyncedCurrentHp(existingHpSnapshot, guest.Creature.MaxHp);
-                guest.Creature.SetCurrentHpInternal(syncedHp);
-                guest.PopulateRelicGrabBagIfNecessary(Compat.CreateDeterministicRng(state.Rng.StringSeed, seatOffset + i, "MidRunJoin.Relics"));
-                var serializedGuest = guest.ToSerializable();
+                SerializablePlayer serializedGuest;
+                bool isRestored = spec.RestoredPlayer != null;
+
+                if (isRestored)
+                {
+                    // Clone the stashed player's personal progress (deck, relics, potions, gold, HP, RNG, grab bag)
+                    var playerTypeInfo = JsonSerializationUtility.GetTypeInfo<SerializablePlayer>();
+                    serializedGuest = JsonSerializer.Deserialize(
+                        JsonSerializer.SerializeToUtf8Bytes(spec.RestoredPlayer!, playerTypeInfo),
+                        playerTypeInfo)!;
+                    serializedGuest.NetId = spec.GuestId;
+                }
+                else
+                {
+                    var guest = Player.CreateForNewRun(spec.Character, UnlockState.none, spec.GuestId);
+                    state.AddPlayerDebug(guest, -1);
+                    ascension.ApplyEffectsTo(guest);
+                    int syncedHp = CatchUpHealthFormula.ComputeSyncedCurrentHp(existingHpSnapshot, guest.Creature.MaxHp);
+                    guest.Creature.SetCurrentHpInternal(syncedHp);
+                    guest.PopulateRelicGrabBagIfNecessary(Compat.CreateDeterministicRng(state.Rng.StringSeed, seatOffset + i, "MidRunJoin.Relics"));
+                    serializedGuest = guest.ToSerializable();
+                }
+
                 bool hasCatchUpFlow = !string.IsNullOrWhiteSpace(catchUpFlowId) &&
                     !catchUpFlowId.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase);
-                if ((hasCatchUpFlow || candidate.Modifiers.Count > 0) && serializedGuest.Relics.Count > 0)
+                if ((hasCatchUpFlow || (!isRestored && candidate.Modifiers.Count > 0)) && serializedGuest.Relics.Count > 0)
                 {
                     string markerFlow = hasCatchUpFlow ? catchUpFlowId! : NoneCatchUpFlow.FlowId;
-                    serializedGuest.Relics[0].FloorAddedToDeck = CatchUpCoordinator.EncodeFlowMarker(markerFlow);
+                    serializedGuest.Relics[0].FloorAddedToDeck = CatchUpCoordinator.EncodeFlowMarker(markerFlow, isRestored);
                 }
                 candidate.Players.Add(serializedGuest);
 

@@ -39,9 +39,15 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
     public string DisplayName => ModLoc.FlowHistoryBellName;
     public string Description => ModLoc.FlowHistoryBellDesc;
 
-    public List<Reward> BuildRewards(RunState state, Player guest)
+    public List<Reward> BuildRewards(RunState state, Player guest) =>
+        BuildRewardsCore(state, guest, excludePlayerPresentId: null);
+
+    public List<Reward> BuildDeltaRewards(RunState state, Player guest) =>
+        BuildRewardsCore(state, guest, excludePlayerPresentId: guest.NetId);
+
+    private List<Reward> BuildRewardsCore(RunState state, Player guest, ulong? excludePlayerPresentId)
     {
-        var counts = CatchUpHistoryScanner.Scan(state);
+        var counts = CatchUpHistoryScanner.Scan(state, excludePlayerPresentId);
         var breakdown = HistoryBellFormula.Compute(counts);
         var rng = guest.PlayerRng.Rewards;
 
@@ -51,7 +57,7 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
         var cardAndOtherRewards = new List<Reward>();
 
         // 1. Combat rooms: invoke STS2's native room reward generation + Hook.ModifyRewards per visited combat
-        var visitedCombats = CatchUpHistoryScanner.GetVisitedCombatRooms(state);
+        var visitedCombats = CatchUpHistoryScanner.GetVisitedCombatRooms(state, excludePlayerPresentId);
         foreach (var (roomType, encounterId) in visitedCombats)
         {
             var roomRewards = GenerateNativeCombatRoomRewards(state, guest, roomType, encounterId);
@@ -97,7 +103,7 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
 
         // 3. Specific visited Ancients: 1 native "choose 1 of 3" reward per visited Ancient,
         //    drawn strictly from that specific Ancient's relic pool.
-        var visitedAncientIds = CatchUpHistoryScanner.GetVisitedAncientIds(state);
+        var visitedAncientIds = CatchUpHistoryScanner.GetVisitedAncientIds(state, excludePlayerPresentId);
         int ancientChoiceCount = 0;
         if (visitedAncientIds.Count > 0)
         {

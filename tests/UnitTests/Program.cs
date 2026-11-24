@@ -215,6 +215,28 @@ void Check(bool condition, string name)
     Console.WriteLine($"PASS: CatchUpHealthFormula HP% sync ({checks} checks)");
 }
 
+// 5b. SteamHelper.TryOpenWorkshopPage (Steam Overlay only, no OS shell)
+{
+    SteamFriends.Reset();
+    SteamInitializer.Initialized = false;
+    SteamUtils.OverlayEnabled = true;
+    Check(!SteamHelper.TryOpenWorkshopPage("https://steamcommunity.com/sharedfiles/filedetails/?id=3844124271"),
+        "TryOpenWorkshopPage returns false when Steam is uninitialized");
+
+    SteamInitializer.Initialized = true;
+    SteamUtils.OverlayEnabled = false;
+    Check(!SteamHelper.TryOpenWorkshopPage("https://steamcommunity.com/sharedfiles/filedetails/?id=3844124271"),
+        "TryOpenWorkshopPage returns false when Steam Overlay is disabled");
+
+    SteamUtils.OverlayEnabled = true;
+    Check(SteamHelper.TryOpenWorkshopPage("https://steamcommunity.com/sharedfiles/filedetails/?id=3844124271"),
+        "TryOpenWorkshopPage returns true when Steam Overlay is enabled");
+    Check(SteamFriends.OpenedWebPages.Count == 1 &&
+          SteamFriends.OpenedWebPages[0].Contains("3844124271"),
+        "TryOpenWorkshopPage opens exact workshop URL via SteamFriends");
+    Console.WriteLine($"PASS: SteamHelper.TryOpenWorkshopPage ({checks} checks)");
+}
+
 // 6. Manifest & Release packaging hygiene check
 {
     string projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));

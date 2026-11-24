@@ -44,6 +44,7 @@ internal static class MissingModWarning
     internal const string PlayerListName = "MissingModPlayerList";
     internal const string OpenWorkshopButtonName = "OpenWorkshopButton";
     internal const string IgnoreButtonName = "IgnoreMissingModButton";
+    internal const string ToastName = "MidRunJoinToast";
 
     private static readonly MethodInfo? BeginRunIfAllReadyMethod =
         AccessTools.Method(typeof(LoadRunLobby), "BeginRunForAllPlayersIfAllReady");
@@ -258,13 +259,15 @@ internal static class MissingModWarning
         VanillaUi.StylePrimaryButton(workshopBtn, 15);
         workshopBtn.Pressed += () =>
         {
-            try { OS.ShellOpen(WorkshopUrl); }
-            catch (Exception ex) { Log.Warn($"[MidRunJoin] Failed to open Workshop URL: {ex.Message}"); }
-            try { DisplayServer.ClipboardSet(WorkshopUrl); }
-            catch { /* Ignore clipboard errors in headless mode. */ }
-
-            hintLabel.Text = ModLoc.MissingModWorkshopOpenedHint;
-            hintLabel.Visible = true;
+            if (SteamHelper.TryOpenWorkshopPage(WorkshopUrl))
+            {
+                hintLabel.Text = ModLoc.MissingModWorkshopOpenedHint;
+                hintLabel.Visible = true;
+            }
+            else
+            {
+                ShowToast(modalRoot, ModLoc.MissingModWorkshopUnavailableToast);
+            }
         };
 
         var ignoreBtn = new Button
@@ -286,6 +289,65 @@ internal static class MissingModWarning
 
         hostParent.AddChild(modalRoot);
         return modalRoot;
+    }
+
+    internal static Control ShowToast(Control host, string message)
+    {
+        if (host.GetNodeOrNull<Control>(ToastName) is { } existing)
+        {
+            host.RemoveChild(existing);
+            existing.QueueFree();
+        }
+
+        var toast = new PanelContainer
+        {
+            Name = ToastName,
+            ZIndex = 200,
+            MouseFilter = Control.MouseFilterEnum.Ignore,
+            AnchorLeft = 0.5f,
+            AnchorRight = 0.5f,
+            AnchorTop = 1f,
+            AnchorBottom = 1f,
+            OffsetLeft = -220,
+            OffsetRight = 220,
+            OffsetTop = -112,
+            OffsetBottom = -64,
+            GrowHorizontal = Control.GrowDirection.Both,
+            GrowVertical = Control.GrowDirection.Begin
+        };
+        toast.AddThemeStyleboxOverride("panel", VanillaUi.MakeBox(
+            bg: new Color(0.06f, 0.08f, 0.11f, 0.82f),
+            border: new Color(0.784f, 0.635f, 0.290f, 0.72f),
+            borderWidth: 1,
+            radius: 10,
+            padH: 20,
+            padV: 10));
+
+        var label = new Label
+        {
+            Name = "ToastLabel",
+            Text = message,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        VanillaUi.ApplyFont(label, FontType.Bold, 16, StsColors.cream, outlineSize: 2);
+        toast.AddChild(label);
+
+        host.AddChild(toast);
+
+        toast.Modulate = new Color(1f, 1f, 1f, 0f);
+        var tween = toast.CreateTween();
+        tween.TweenProperty(toast, "modulate:a", 0.92f, 0.15);
+        tween.TweenInterval(2.2);
+        tween.TweenProperty(toast, "modulate:a", 0f, 0.35);
+        tween.TweenCallback(Callable.From(() =>
+        {
+            if (GodotObject.IsInstanceValid(toast))
+                toast.QueueFree();
+        }));
+
+        return toast;
     }
 
     internal static void CloseIfOpen(Control? hostParent)

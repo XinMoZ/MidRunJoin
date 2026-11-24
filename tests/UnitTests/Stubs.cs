@@ -65,6 +65,18 @@ namespace Steamworks
         k_EPersonaStateSnooze = 4
     }
 
+    public enum EActivateGameOverlayToWebPageMode
+    {
+        k_EActivateGameOverlayToWebPageMode_Default = 0,
+        k_EActivateGameOverlayToWebPageMode_Modal = 1
+    }
+
+    public static class SteamUtils
+    {
+        public static bool OverlayEnabled = true;
+        public static bool IsOverlayEnabled() => OverlayEnabled;
+    }
+
     public struct CSteamID
     {
         public ulong m_SteamID;
@@ -92,6 +104,7 @@ namespace Steamworks
     public static class SteamFriends
     {
         public static readonly List<FakeSteamFriend> Friends = new();
+        public static readonly List<string> OpenedWebPages = new();
         public static string LocalPersonaName = "Host";
         public static bool ThrowOnEnumerate;
         public static int GetFriendCountCalls;
@@ -99,10 +112,14 @@ namespace Steamworks
         public static void Reset()
         {
             Friends.Clear();
+            OpenedWebPages.Clear();
             LocalPersonaName = "Host";
             ThrowOnEnumerate = false;
             GetFriendCountCalls = 0;
         }
+
+        public static void ActivateGameOverlayToWebPage(string url, EActivateGameOverlayToWebPageMode mode) =>
+            OpenedWebPages.Add(url);
 
         public static string GetPersonaName() => LocalPersonaName;
 

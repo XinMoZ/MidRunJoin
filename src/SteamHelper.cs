@@ -177,4 +177,24 @@ internal static class SteamHelper
             Log.Warn($"[MidRunJoin] Failed to send Steam lobby invite to {guestId}: {ex.Message}");
         }
     }
+
+    internal static bool TryOpenWorkshopPage(string url)
+    {
+        if (!SteamInitializer.Initialized || string.IsNullOrWhiteSpace(url))
+            return false;
+        try
+        {
+            if (!SteamUtils.IsOverlayEnabled())
+                return false;
+            SteamFriends.ActivateGameOverlayToWebPage(
+                url,
+                EActivateGameOverlayToWebPageMode.k_EActivateGameOverlayToWebPageMode_Default);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"[MidRunJoin] Failed to open Steam Overlay web page: {ex.Message}");
+            return false;
+        }
+    }
 }

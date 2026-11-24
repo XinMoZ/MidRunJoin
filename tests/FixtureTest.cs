@@ -784,6 +784,12 @@ public static class FixtureTest
         var ignoreBtn = warnModal.FindChild("IgnoreMissingModButton", true, false) as Button;
         Require(workshopBtn != null && workshopBtn.Text.Contains("创意工坊", StringComparison.Ordinal),
             "MissingMod modal must have OpenWorkshopButton");
+        if (workshopBtn != null)
+            workshopBtn.EmitSignal(BaseButton.SignalName.Pressed);
+        var toastNode = warnModal.GetNodeOrNull<Control>("MidRunJoinToast");
+        var toastLabel = toastNode?.FindChild("ToastLabel", true, false) as Label;
+        Require(toastNode != null && toastLabel != null && toastLabel.Text == "无法跳转，关注XinMoZinc谢谢喵",
+            $"Expected unavailable Workshop toast, got: {toastLabel?.Text}");
         Require(ignoreBtn != null, "MissingMod modal must have IgnoreMissingModButton");
         if (ignoreBtn != null)
             ignoreBtn.EmitSignal(BaseButton.SignalName.Pressed);

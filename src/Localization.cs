@@ -136,8 +136,11 @@ internal static class ModLoc
         "忽视并以保存状态进入",
         "Ignore & Enter with Saved State");
     internal static string MissingModWorkshopOpenedHint => Pick(
-        "已打开创意工坊页面，链接也已复制到剪贴板，可直接发给好友。",
-        "Opened Workshop page and copied the link to clipboard.");
+        "已在 Steam 界面中打开创意工坊页面。",
+        "Opened Workshop page in Steam Overlay.");
+    internal static string MissingModWorkshopUnavailableToast => Pick(
+        "无法跳转，关注XinMoZinc谢谢喵",
+        "Unable to open Steam Workshop — follow XinMoZinc, thanks nya!");
 
     // Candidate validation errors
     internal static string ErrExitRunFirst => Pick(

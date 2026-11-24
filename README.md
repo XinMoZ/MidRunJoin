@@ -27,8 +27,8 @@
 
 ## Features
 
-### Party Roster Editor (Multiplayer Load Screen)
-- Adds a floating **`+ Mid-Run Join`** button in the top-right corner of the **Load Multiplayer** button (automatically follows the game's active language for English / Chinese).
+### Party Roster Editor (Host from Save)
+- Adds a floating **`+ Mid-Run Join`** button in the top-right corner of the **Host from Save** button (automatically follows the game's active language for English / Chinese).
 - **Add multiple guests at once**:
   - **Steam mode**: Pick from your Steam friends list (sorted by *Playing STS2* → *Online* → *Offline*, with search and *Online only* filter), or enter a non-friend SteamID64 manually.
   - **Local LAN / `--fastmp` mode**: Enter numeric player IDs directly.
@@ -45,13 +45,13 @@ Scans the **host's route** in `MapPointHistory` (compatible with split-path mods
 
 | Room Type | Catch-Up Reward |
 |---|---|
-| **Monster / Elite / Boss** | Native encounter drops (merged into 1 gold slot; potions capped to potion slots; supports modded reward hooks) + 1 Card Removal per Boss |
-| **Treasure** | Rolled treasure gold + relic |
-| **Unknown (`?`) / Shop** | +10 gold each |
+| **Enemy / Elite / Boss** | Native encounter drops (merged into 1 Gold slot; Potions capped to potion slots; supports modded reward hooks) + 1 Card Removal per Boss |
+| **Treasure Room** | Rolled Treasure Gold + Relic |
+| **Unknown (`???`) / Merchant (Shop)** | +10 Gold each |
 | **Rest Site** | 1 Card Upgrade per 2 Rest Sites (rounded down) |
-| **Ancient (incl. Neow)** | 1 native choose-1-of-3 Ancient relic reward per visited Ancient |
-| **Health** | Current HP initialized to match the party's average remaining HP% |
-| **Custom Run Modifiers** | Per-player run-start modifiers (`GenerateNeowOption` / `ClearsPlayerDeck`) run once for fresh guests (skipped for restored stashed players) |
+| **Ancient (incl. Neow)** | 1 native choose-1-of-3 Ancient Relic reward per visited Ancient |
+| **HP** | Current HP initialized to match the party's average remaining HP% |
+| **Custom Mode Modifiers** | Per-player run-start Modifiers (`GenerateNeowOption` / `ClearsPlayerDeck`) run once for fresh guests (skipped for restored stashed players) |
 
 ### Adaptive Safe-Sync & Host Missing-Mod Warning
 - **Early-floor history backfill**: The host backfills empty `PlayerMapPointHistoryEntry` placeholders for newly added guests across earlier floors (alongside [HistorySafety.cs](src/HistorySafety.cs)), preventing post-run Game Over and Run History hover crashes even on unmodded clients.
@@ -79,7 +79,7 @@ Subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedet
 ## Usage
 
 1. Finish the current room's rewards, advance to a checkpoint, and exit to the main menu.
-2. As the host, open **Multiplayer** and click **`+ Mid-Run Join`** on the top-right of **Load Multiplayer**.
+2. As the host, open **Multiplayer** and click **`+ Mid-Run Join`** on the top-right of **Host from Save**.
 3. Remove absent players (*Delete* or *Save Progress*) and/or add new players with a character (or *Random*) and catch-up mode, then click **Host Updated Lobby**.
 4. Once all players join and ready up, the run loads and newly joined guests receive their merged catch-up reward screen before continuing together.
 

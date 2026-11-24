@@ -24,7 +24,7 @@ internal static class ModLoc
 
     internal static string Pick(string zh, string en) => IsChinese ? zh : en;
 
-    // Floating button on Load Multiplayer button
+    // Floating button on Host from Save button
     internal static string FloatingButtonText => Pick("＋ 中途加入", "+ Mid-Run Join");
     internal static string FloatingButtonTooltip => Pick(
         "调整联机成员：添加新玩家（带补给流程）或移除缺席玩家",
@@ -54,7 +54,7 @@ internal static class ModLoc
         }
         else
         {
-            string suffix = total > 4 ? " (4+ players requires a limit-break mod)" : "";
+            string suffix = total > 4 ? " (5+ players requires a player-limit mod)" : "";
             return $"Keeping {kept} · Removing {removed} · Adding {added} ({total} total){suffix}";
         }
     }
@@ -177,11 +177,11 @@ internal static class ModLoc
         "Catch-Up Rewards (By Visited Rooms)");
     internal static string FlowHistoryBellDesc => Pick(
         "根据队伍已历经的房间发放对应奖励：战斗提供卡牌/金币/遗物、问号与商店各折算10金、宝箱提供金币与随机遗物、每2个火堆提供1次强化、每名先古之民提供1次对应遗物三选一、每名Boss提供1次删牌。",
-        "Grants rewards based on rooms the party has visited: combat cards/gold/relics, +10 gold per ?/Shop, treasure gold + relic, 1 card upgrade per 2 Rest Sites, 1 choose-1-of-3 Ancient relic per visited Ancient, and 1 card removal per Boss.");
+        "Grants rewards based on rooms the party has visited: Enemy/Elite/Boss combat drops (Cards/Gold/Relics/Potions), +10 Gold per Unknown (???) or Merchant, Treasure Gold + Relic, 1 Card Upgrade per 2 Rest Sites, 1 choose-1-of-3 Ancient Relic per visited Ancient, and 1 Card Removal per Boss.");
     internal static string FlowNoneName => Pick(
         "无补给（仅初始牌组与遗物）",
-        "No Catch-Up (Starter Kit Only)");
+        "No Catch-Up (Starter Deck & Relic Only)");
     internal static string FlowNoneDesc => Pick(
         "不发放额外补给，新人直接以职业初始配置加入。",
-        "No extra rewards; new guests join with their character's starter deck and relic.");
+        "No extra rewards; new players join with their character's starter deck and starter relic.");
 }

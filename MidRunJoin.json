@@ -2,7 +2,7 @@
   "id": "MidRunJoin",
   "name": "MidRunJoin · 中途加入",
   "author": "xinmo",
-  "description": "Add mid-run guests or remove absent players when loading a multiplayer save, with catch-up rewards based on visited rooms. / 支持在联机读档时添加新人或移除缺席成员，并按经过的房间补给奖励。",
+  "description": "Add mid-run guests or remove absent players when hosting from a multiplayer save, with catch-up rewards based on visited rooms. / 支持在联机读档时添加新人或移除缺席成员，并按经过的房间补给奖励。",
   "version": "0.5.0",
   "has_pck": false,
   "has_dll": true,

@@ -128,20 +128,36 @@ internal static class Candidate
                 }
                 candidate.Players.Add(serializedGuest);
 
-                // Ensure both the latest MapPointHistoryEntry (CurrentMapPointHistoryEntry) and the host's
-                // latest entry (in case a split-path mod records separate per-player route entries) have a
-                // PlayerStats slot for the newly added guest.
+                // Backfill missing PlayerStats entries across all acts/floors so unmodded peers
+                // (existing teammates or unmodded guests) never crash in MapPointHistoryEntry.GetEntry
+                // during Game Over settlement or Run History hover tips.
+                // - The current join/rejoin boundary entry receives the guest's actual MaxHp/CurrentHp (> 0).
+                // - Earlier/missed floors receive empty placeholders (MaxHp == 0) so CatchUpHistoryScanner
+                //   can still distinguish real participated floors when computing delta catch-up rewards.
                 var latestActHistory = candidate.MapPointHistory.LastOrDefault(act => act.Count > 0);
                 var latestEntry = latestActHistory?.LastOrDefault();
-                if (latestEntry != null && !latestEntry.PlayerStats.Any(ps => ps.PlayerId == spec.GuestId))
-                {
-                    latestEntry.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = spec.GuestId });
-                }
                 var latestHostEntry = latestActHistory?.LastOrDefault(e => e.PlayerStats.Any(ps => ps.PlayerId == hostId));
-                if (latestHostEntry != null && !ReferenceEquals(latestHostEntry, latestEntry) &&
-                    !latestHostEntry.PlayerStats.Any(ps => ps.PlayerId == spec.GuestId))
+                foreach (var actHistory in candidate.MapPointHistory)
                 {
-                    latestHostEntry.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = spec.GuestId });
+                    foreach (var entry in actHistory)
+                    {
+                        bool isBoundary = ReferenceEquals(entry, latestEntry) || ReferenceEquals(entry, latestHostEntry);
+                        var existingStat = entry.PlayerStats.FirstOrDefault(ps => ps.PlayerId == spec.GuestId);
+                        if (existingStat == null)
+                        {
+                            entry.PlayerStats.Add(new PlayerMapPointHistoryEntry
+                            {
+                                PlayerId = spec.GuestId,
+                                MaxHp = isBoundary ? serializedGuest.MaxHp : 0,
+                                CurrentHp = isBoundary ? serializedGuest.CurrentHp : 0
+                            });
+                        }
+                        else if (isBoundary && existingStat.MaxHp == 0)
+                        {
+                            existingStat.MaxHp = serializedGuest.MaxHp;
+                            existingStat.CurrentHp = serializedGuest.CurrentHp;
+                        }
+                    }
                 }
             }
         }

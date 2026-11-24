@@ -495,16 +495,17 @@ public static class FixtureTest
         Require(restored.Players.Select(p => p.NetId).SequenceEqual(new ulong[] { 1, 2, 3, 4 }), "4P seat order changed");
         Require(restored.CurrentMapPointHistoryEntry?.GetEntry(3).PlayerId == 3, "Guest 3 boundary history missing");
         Require(restored.CurrentMapPointHistoryEntry?.GetEntry(4).PlayerId == 4, "Guest 4 boundary history missing");
-        Require(restored.MapPointHistory[0][0].PlayerStats.Count == 2,
-            $"Earlier floor history should keep 2 players, got {restored.MapPointHistory[0][0].PlayerStats.Count}");
+        Require(restored.MapPointHistory[0][0].PlayerStats.Count == 4,
+            $"Earlier floor history should backfill guests for unmodded peer safety (expected 4, got {restored.MapPointHistory[0][0].PlayerStats.Count})");
+        Require(restored.MapPointHistory[0][0].GetEntry(3).MaxHp == 0 && restored.MapPointHistory[0][0].GetEntry(4).MaxHp == 0,
+            "Backfilled earlier floor placeholders must have MaxHp == 0");
 
-        // Post-run settlement safety: GetEntry(guest) on earlier floors visited before guest joined must NOT throw
-        // and must NOT mutate PlayerStats (fixes late-joining players getting stuck on NGameOverScreen summary!).
+        // Post-run settlement safety: SafeGetEntry on a detached entry missing player 99 must NOT throw or mutate PlayerStats.
         var earlyFloor = restored.MapPointHistory[0][0];
-        var guestEarlyStats = earlyFloor.GetEntry(3);
-        Require(guestEarlyStats.PlayerId == 3 && guestEarlyStats.GoldGained == 0,
-            "SafeGetEntry should return detached empty stats for late-joining guest on earlier floor");
-        Require(earlyFloor.PlayerStats.Count == 2,
+        var detachedStats = earlyFloor.GetEntry(99);
+        Require(detachedStats.PlayerId == 99 && detachedStats.GoldGained == 0,
+            "SafeGetEntry should return detached empty stats for absent player");
+        Require(earlyFloor.PlayerStats.Count == 4,
             $"SafeGetEntry must not mutate earlier floor PlayerStats (got {earlyFloor.PlayerStats.Count})");
         int guestTotalGold = restored.MapPointHistory.SelectMany(act => act).Sum(e => e.GetEntry(3).GoldGained);
         Require(guestTotalGold == 0, $"Unexpected guest total gold across history: {guestTotalGold}");
@@ -700,7 +701,98 @@ public static class FixtureTest
         Require(((System.Collections.IDictionary)loadForRun.Invoke(null, [cp3ForStash])!).Count == 0,
             "DeleteCurrentMultiplayerRun must clear stashed player cache");
 
-        Log.Info($"[MidRunJoinSmoke] PASS: MultiGuestDialog + MultiRemoveGUI (3={expectedGuest3Char}, 4={expectedGuest4Char}, {checkCount} checks)");
+        // 5. Scheme B: early-floor history backfill + safe-sync markers + safe-sync rewards + host missing-mod modal
+        var missingModType = typeof(MidRunJoin.Entry).Assembly.GetType("MidRunJoin.MissingModWarning")!;
+        var containsMidRunJoin = AccessTools.Method(missingModType, "ContainsMidRunJoin")!;
+        Require((bool)containsMidRunJoin.Invoke(null, [new[] { "OtherMod", "MidRunJoin" }])!,
+            "ContainsMidRunJoin must detect MidRunJoin in mod list");
+        Require((bool)containsMidRunJoin.Invoke(null, [new[] { "midrunjoin-0.5.0" }])!,
+            "ContainsMidRunJoin must match case-insensitively");
+        Require(!(bool)containsMidRunJoin.Invoke(null, [new[] { "OtherMod" }])!,
+            "ContainsMidRunJoin must return false when MidRunJoin is absent");
+
+        // Verify 4-band marker encoding/decoding (240..255)
+        int mFullFresh = CatchUpCoordinator.EncodeFlowMarker(HistoryBellCatchUpFlow.FlowId, isRestored: false, safeSync: false);
+        int mSafeFresh = CatchUpCoordinator.EncodeFlowMarker(HistoryBellCatchUpFlow.FlowId, isRestored: false, safeSync: true);
+        int mFullRestored = CatchUpCoordinator.EncodeFlowMarker(HistoryBellCatchUpFlow.FlowId, isRestored: true, safeSync: false);
+        int mSafeRestored = CatchUpCoordinator.EncodeFlowMarker(HistoryBellCatchUpFlow.FlowId, isRestored: true, safeSync: true);
+        Require(mFullFresh == 240 && mSafeFresh == 244 && mFullRestored == 248 && mSafeRestored == 252,
+            $"Unexpected 4-band markers: {mFullFresh},{mSafeFresh},{mFullRestored},{mSafeRestored}");
+        CatchUpCoordinator.DecodeMarker(mSafeRestored, out int decIdx, out bool decRestored, out bool decSafe);
+        Require(decIdx == 0 && decRestored && decSafe, "DecodeMarker failed for SafeSyncRestored");
+
+        // Verify Candidate.Prepare backfills earlier floors for unmodded peer safety
+        var candidateType = typeof(MidRunJoin.Entry).Assembly.GetType("MidRunJoin.Candidate")!;
+        var prepare4 = AccessTools.Method(candidateType, "Prepare",
+            [typeof(SerializableRun), typeof(IReadOnlyList<GuestSpec>), typeof(IReadOnlyCollection<ulong>), typeof(string)])!;
+        var cp2ForBackfill = CreateMapCheckpoint([1, 2], 0);
+        var backfillCheck = (SerializableRun)prepare4.Invoke(null, [cp2ForBackfill, (IReadOnlyList<GuestSpec>)[new GuestSpec(3, ModelDb.Character<Ironclad>())], null, HistoryBellCatchUpFlow.FlowId])!;
+        foreach (var actEntries in backfillCheck.MapPointHistory)
+        {
+            foreach (var hEntry in actEntries)
+            {
+                Require(hEntry.PlayerStats.Any(ps => ps.PlayerId == 3),
+                    "Candidate.Prepare must backfill earlier MapPointHistory floors for unmodded peer safety");
+            }
+        }
+
+        // Verify BuildSafeSyncRewards skips CardUpgradeReward and does NOT mutate guest.PlayerRng.Rewards
+        var safeState = RunState.FromSerializable(backfillCheck);
+        var safeGuest = safeState.Players.First(p => p.NetId == 3);
+        var rngTypeInfo = JsonSerializationUtility.GetTypeInfo<SerializablePlayerRngSet>();
+        string rngBeforeJson = System.Text.Json.JsonSerializer.Serialize(safeGuest.PlayerRng.ToSerializable(), rngTypeInfo);
+        var safeRewards = ((HistoryBellCatchUpFlow)CatchUpRegistry.Default).BuildSafeSyncRewards(safeState, safeGuest, isRestored: false);
+        string rngAfterJson = System.Text.Json.JsonSerializer.Serialize(safeGuest.PlayerRng.ToSerializable(), rngTypeInfo);
+        Require(safeRewards.Count > 0, "BuildSafeSyncRewards must produce rewards for visited rooms");
+        Require(!safeRewards.Any(r => r.GetType().Name.Contains("CardUpgradeReward", StringComparison.Ordinal)),
+            "BuildSafeSyncRewards must skip CardUpgradeReward (PlayerChoiceSynchronizer)");
+        Require(rngBeforeJson == rngAfterJson,
+            "BuildSafeSyncRewards must not mutate guest.PlayerRng");
+
+        // Verify Host Missing-Mod Warning Modal UI (vertical list of multiple missing-mod players + 2 buttons)
+        var showOrRefresh = AccessTools.Method(missingModType, "ShowOrRefresh")!;
+        var getIgnoreBtnText = AccessTools.Method(missingModType, "GetIgnoreButtonText")!;
+        var modLocType = typeof(MidRunJoin.Entry).Assembly.GetType("MidRunJoin.ModLoc")!;
+        var langOverrideProp = AccessTools.Property(modLocType, "LanguageOverride")!;
+        var freshOnlyPeers = new List<MidRunJoin.MissingModPeerInfo>
+        {
+            new(3, "FreshGuestA", MidRunJoin.MissingModPeerRole.NewGuest),
+            new(4, "FreshGuestB", MidRunJoin.MissingModPeerRole.NewGuest)
+        };
+        var savedOnlyPeers = new List<MidRunJoin.MissingModPeerInfo>
+        {
+            new(2, "OldTeammate", MidRunJoin.MissingModPeerRole.ExistingTeammate)
+        };
+        var mixedPeers = new List<MidRunJoin.MissingModPeerInfo>
+        {
+            new(3, "FreshGuestA", MidRunJoin.MissingModPeerRole.NewGuest),
+            new(2, "OldTeammate", MidRunJoin.MissingModPeerRole.ExistingTeammate)
+        };
+        langOverrideProp.SetValue(null, "zhs");
+        Require(((string)getIgnoreBtnText.Invoke(null, [freshOnlyPeers])!).Contains("初始状态", StringComparison.Ordinal),
+            "Fresh-only ignore button must mention 初始状态");
+        Require(((string)getIgnoreBtnText.Invoke(null, [savedOnlyPeers])!).Contains("保存状态", StringComparison.Ordinal),
+            "Existing/restored-only ignore button must mention 保存状态");
+        Require(((string)getIgnoreBtnText.Invoke(null, [mixedPeers])!).Contains("初始状态", StringComparison.Ordinal),
+            "Mixed missing-mod list must prioritize 忽视并以初始状态进入");
+        bool ignoreClicked = false;
+        var warnModal = (Control)showOrRefresh.Invoke(null, [menu, mixedPeers, (Action)(() => ignoreClicked = true)])!;
+        var warnList = warnModal.FindChild("MissingModPlayerList", true, false) as VBoxContainer;
+        Require(warnList != null && warnList.GetChildCount() == 2,
+            $"MissingModPlayerList expected 2 rows, got {warnList?.GetChildCount()}");
+        var workshopBtn = warnModal.FindChild("OpenWorkshopButton", true, false) as Button;
+        var ignoreBtn = warnModal.FindChild("IgnoreMissingModButton", true, false) as Button;
+        Require(workshopBtn != null && workshopBtn.Text.Contains("创意工坊", StringComparison.Ordinal),
+            "MissingMod modal must have OpenWorkshopButton");
+        Require(ignoreBtn != null, "MissingMod modal must have IgnoreMissingModButton");
+        if (ignoreBtn != null)
+            ignoreBtn.EmitSignal(BaseButton.SignalName.Pressed);
+        Require(ignoreClicked, "Clicking IgnoreMissingModButton must invoke onIgnore callback");
+        Require(menu.GetNodeOrNull<Control>("MidRunJoinMissingModModal") == null,
+            "Clicking IgnoreMissingModButton must close the warning modal");
+        langOverrideProp.SetValue(null, null);
+
+        Log.Info($"[MidRunJoinSmoke] PASS: MultiGuestDialog + MultiRemoveGUI + SchemeB ({expectedGuest3Char}, {expectedGuest4Char}, {checkCount} checks)");
     }
 
     private static Control ShiftLoad(NMultiplayerSubmenu menu, SerializableRun checkpoint)
@@ -724,11 +816,13 @@ public static class FixtureTest
 
         var floor1 = new MapPointHistoryEntry(MapPointType.Ancient, state);
         floor1.Rooms.Add(new MapPointRoomHistoryEntry { RoomType = RoomType.Event, ModelId = ModelDb.Event<Neow>().Id });
+        foreach (var ps in floor1.PlayerStats) { ps.MaxHp = 80; ps.CurrentHp = 80; }
         if (hostGoldPerFloor is { Length: > 0 })
             floor1.GetEntry(playerIds[0]).GoldGained = hostGoldPerFloor[0];
 
         var floor2 = new MapPointHistoryEntry(MapPointType.Monster, state);
         floor2.Rooms.Add(new MapPointRoomHistoryEntry { RoomType = RoomType.Monster });
+        foreach (var ps in floor2.PlayerStats) { ps.MaxHp = 80; ps.CurrentHp = 80; }
         if (hostGoldPerFloor is { Length: > 1 })
             floor2.GetEntry(playerIds[0]).GoldGained = hostGoldPerFloor[1];
 

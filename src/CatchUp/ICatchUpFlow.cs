@@ -23,6 +23,8 @@ public interface ICatchUpFlow
     string Description { get; }
     List<Reward> BuildRewards(RunState state, Player guest);
     List<Reward> BuildDeltaRewards(RunState state, Player guest) => BuildRewards(state, guest);
+    List<Reward> BuildSafeSyncRewards(RunState state, Player guest, bool isRestored) =>
+        isRestored ? BuildDeltaRewards(state, guest) : BuildRewards(state, guest);
 }
 
 public static class CatchUpHistoryScanner
@@ -63,20 +65,27 @@ public static class CatchUpHistoryScanner
         }
 
         // For a restored (stashed) player, only include host floors strictly AFTER the last floor
-        // they participated in before rejoining (excluding floors prior to their original join as well
-        // as any floor where their PlayerId is already present, including the current rejoin boundary).
+        // they actually participated in before rejoining. Backfilled placeholder entries (added by
+        // Candidate.Prepare so unmodded peers never crash in MapPointHistoryEntry.GetEntry) have
+        // MaxHp == 0, whereas real participated floors always record MaxHp > 0.
         ulong pid = excludePlayerPresentId.Value;
+        bool hasRealHpStats = hostEntries.Any(h => h.Entry.PlayerStats.Any(ps => ps.PlayerId == pid && ps.MaxHp > 0));
+        bool ParticipatedIn(MegaCrit.Sts2.Core.Runs.History.MapPointHistoryEntry entry) =>
+            hasRealHpStats
+                ? entry.PlayerStats.Any(ps => ps.PlayerId == pid && ps.MaxHp > 0)
+                : entry.PlayerStats.Any(ps => ps.PlayerId == pid);
+
         int lastPresentBeforeRejoin = -1;
         for (int i = 0; i < hostEntries.Count - 1; i++)
         {
-            if (hostEntries[i].Entry.PlayerStats.Any(ps => ps.PlayerId == pid))
+            if (ParticipatedIn(hostEntries[i].Entry))
                 lastPresentBeforeRejoin = i;
         }
 
         int startIdx = lastPresentBeforeRejoin + 1;
         for (int i = startIdx; i < hostEntries.Count; i++)
         {
-            if (hostEntries[i].Entry.PlayerStats.Any(ps => ps.PlayerId == pid))
+            if (ParticipatedIn(hostEntries[i].Entry))
                 continue;
             yield return hostEntries[i];
         }

@@ -45,6 +45,150 @@ public sealed class HistoryBellCatchUpFlow : ICatchUpFlow
     public List<Reward> BuildDeltaRewards(RunState state, Player guest) =>
         BuildRewardsCore(state, guest, excludePlayerPresentId: guest.NetId);
 
+    /// <summary>
+    /// Safe-sync reward generation used when at least one peer in the lobby does NOT have MidRunJoin
+    /// installed. Uses a detached deterministic <see cref="MegaCrit.Sts2.Core.Random.Rng"/> so neither
+    /// <see cref="Player.PlayerRng"/> nor <see cref="RunState.SharedRelicGrabBag"/> is mutated, and
+    /// emits only reward types natively broadcast by STS2's <c>RewardSynchronizer</c> (Gold, Cards,
+    /// pre-picked Relics, Potions, Ancient 1-of-3 relics, and Card Removals), skipping
+    /// <c>CardUpgradeReward</c> which relies on lockstep <c>PlayerChoiceSynchronizer</c>.
+    /// </summary>
+    public List<Reward> BuildSafeSyncRewards(RunState state, Player guest, bool isRestored)
+    {
+        ulong? excludeId = isRestored ? guest.NetId : null;
+        var counts = CatchUpHistoryScanner.Scan(state, excludeId);
+        var breakdown = HistoryBellFormula.Compute(counts);
+        var rng = Compat.CreateDeterministicRng(
+            state.Rng.StringSeed,
+            (int)(guest.NetId & 0x7FFFFFFF),
+            isRestored ? "MidRunJoin.SafeSyncDelta" : "MidRunJoin.SafeSync");
+
+        int totalGold = breakdown.FlatBonusGold;
+        var visitedCombats = CatchUpHistoryScanner.GetVisitedCombatRooms(state, excludeId);
+        var cardRewards = new List<Reward>();
+        int relicCount = counts.TreasureRooms;
+        int potionCount = 0;
+
+        foreach (var (roomType, _) in visitedCombats)
+        {
+            var (minGold, maxGold) = roomType switch
+            {
+                RoomType.Elite => (HistoryBellFormula.EliteGoldMin, HistoryBellFormula.EliteGoldMaxExclusive),
+                RoomType.Boss => (HistoryBellFormula.BossGoldMin, HistoryBellFormula.BossGoldMaxExclusive),
+                _ => (HistoryBellFormula.MonsterGoldMin, HistoryBellFormula.MonsterGoldMaxExclusive)
+            };
+            totalGold += rng.NextInt(minGold, maxGold);
+
+            var cardReward = Compat.CreateCardReward(
+                Compat.WithIsFromCombatIfSupported(CardCreationOptions.ForRoom(guest, roomType)),
+                3,
+                guest);
+            cardReward.SetRng(rng);
+            cardRewards.Add(cardReward);
+
+            if (roomType == RoomType.Elite)
+                relicCount++;
+
+            if (potionCount < Math.Max(1, guest.MaxPotionCount) && rng.NextFloat() < 0.40f)
+                potionCount++;
+        }
+
+        for (int i = 0; i < counts.TreasureRooms; i++)
+            totalGold += rng.NextInt(HistoryBellFormula.TreasureGoldMin, HistoryBellFormula.TreasureGoldMaxExclusive);
+
+        var rewards = new List<Reward>();
+
+        if (totalGold > 0)
+        {
+            var goldReward = new GoldReward(totalGold, guest);
+            goldReward.SetRng(rng);
+            rewards.Add(goldReward);
+        }
+
+        var excludedRelics = new HashSet<ModelId>(guest.Relics.Select(r => r.Id));
+        var safeRelicPool = BuildSafeRelicPool(state, guest, excludedRelics);
+        for (int i = 0; i < relicCount && safeRelicPool.Count > 0; i++)
+        {
+            int pick = rng.NextInt(safeRelicPool.Count);
+            var chosen = safeRelicPool[pick];
+            safeRelicPool.RemoveAt(pick);
+            excludedRelics.Add(chosen.Id);
+            rewards.Add(new RelicReward(chosen.ToMutable(), guest));
+        }
+
+        var visitedAncientIds = CatchUpHistoryScanner.GetVisitedAncientIds(state, excludeId);
+        int ancientChoiceCount = 0;
+        if (visitedAncientIds.Count > 0)
+        {
+            foreach (var ancientId in visitedAncientIds)
+            {
+                var ancient = ResolveAncient(ancientId);
+                var pool = GetRelicPoolForAncient(ancient, state, guest, excludedRelics);
+                if (pool.Count == 0)
+                    continue;
+
+                var candidates = new List<RelicModel>();
+                int pickCount = Math.Min(HistoryBellFormula.AncientRelicChoicesPerPick, pool.Count);
+                for (int i = 0; i < pickCount; i++)
+                {
+                    int pick = rng.NextInt(pool.Count);
+                    var chosen = pool[pick];
+                    pool.RemoveAt(pick);
+                    excludedRelics.Add(chosen.Id);
+                    candidates.Add(chosen);
+                }
+
+                if (candidates.Count > 0)
+                {
+                    rewards.Add(new AncientRelicChoiceReward(ancient, candidates, guest));
+                    ancientChoiceCount++;
+                }
+            }
+        }
+
+        for (int i = 0; i < breakdown.CardRemovalRewards; i++)
+            rewards.Add(new CardRemovalReward(guest));
+
+        for (int i = 0; i < potionCount; i++)
+        {
+            var potionReward = new PotionReward(guest);
+            potionReward.SetRng(rng);
+            rewards.Add(potionReward);
+        }
+
+        rewards.AddRange(cardRewards);
+
+        Log.Info($"[MidRunJoin] HistoryBell built {rewards.Count} safe-sync reward(s) for guest {guest.NetId} (restored={isRestored}): gold={totalGold}, relics={relicCount}+{ancientChoiceCount} ancient(1-of-3), potions={potionCount}, removals={breakdown.CardRemovalRewards}, cards={cardRewards.Count}");
+        return rewards;
+    }
+
+    private static List<RelicModel> BuildSafeRelicPool(
+        RunState state,
+        Player guest,
+        HashSet<ModelId> excludedIds)
+    {
+        var pool = new List<RelicModel>();
+        foreach (var relic in ModelDb.AllRelics)
+        {
+            if (relic.Rarity is not (RelicRarity.Common or RelicRarity.Uncommon or RelicRarity.Rare))
+                continue;
+            if (excludedIds.Contains(relic.Id))
+                continue;
+            if (!relic.IsAllowed(state))
+                continue;
+            if (relic.Pool != null &&
+                guest.Character.RelicPool != null &&
+                relic.Pool != guest.Character.RelicPool &&
+                relic.Pool.GetType().Name.Contains("Character", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            pool.Add(relic);
+        }
+        pool.Sort((a, b) => StringComparer.Ordinal.Compare(a.Id.Entry, b.Id.Entry));
+        return pool;
+    }
+
     private List<Reward> BuildRewardsCore(RunState state, Player guest, ulong? excludePlayerPresentId)
     {
         var counts = CatchUpHistoryScanner.Scan(state, excludePlayerPresentId);

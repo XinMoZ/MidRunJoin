@@ -119,6 +119,26 @@ internal static class ModLoc
         "调整成员失败，请查看游戏日志。",
         "Failed to update party roster. Please check the game log.");
 
+    // Missing-mod warning popup (shown on Host when a peer connects without MidRunJoin)
+    internal static string MissingModPopupTitle => Pick(
+        "未检测到 MidRunJoin",
+        "MidRunJoin Not Detected");
+    internal static string MissingModPopupBody => Pick(
+        "检测到加入玩家没有安装 mod，因此不会补发奖励：",
+        "Detected joining player(s) without MidRunJoin installed. Catch-up rewards will not be granted:");
+    internal static string MissingModOpenWorkshopButton => Pick(
+        "打开创意工坊",
+        "Open Workshop");
+    internal static string MissingModIgnoreStarterButton => Pick(
+        "忽视并以初始状态进入",
+        "Ignore & Enter with Starter State");
+    internal static string MissingModIgnoreSavedButton => Pick(
+        "忽视并以保存状态进入",
+        "Ignore & Enter with Saved State");
+    internal static string MissingModWorkshopOpenedHint => Pick(
+        "已打开创意工坊页面，链接也已复制到剪贴板，可直接发给好友。",
+        "Opened Workshop page and copied the link to clipboard.");
+
     // Candidate validation errors
     internal static string ErrExitRunFirst => Pick(
         "请先退出当前冒险后再调整联机成员。",

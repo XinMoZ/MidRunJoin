@@ -27,7 +27,45 @@ namespace MidRunJoin;
 [HarmonyPatch]
 internal static class JoinLobby
 {
-    internal sealed record ExpandedSession(ulong[] GuestIds, string FlowId);
+    internal sealed class ExpandedSession
+    {
+        public ulong[] GuestIds { get; }
+        public HashSet<ulong> GuestIdSet { get; }
+        public HashSet<ulong> RestoredGuestIds { get; }
+        public string FlowId { get; }
+        public Dictionary<ulong, MissingModPeerInfo> MissingModPeers { get; } = new();
+        public HashSet<ulong> AcknowledgedMissingModIds { get; } = new();
+        public bool HasAnyMissingModPeer { get; set; }
+
+        public ExpandedSession(ulong[] guestIds, HashSet<ulong> restoredGuestIds, string flowId)
+        {
+            GuestIds = guestIds;
+            GuestIdSet = new HashSet<ulong>(guestIds);
+            RestoredGuestIds = restoredGuestIds;
+            FlowId = flowId;
+        }
+
+        public MissingModPeerRole GetPeerRole(ulong peerId)
+        {
+            if (RestoredGuestIds.Contains(peerId))
+                return MissingModPeerRole.RestoredGuest;
+            if (GuestIdSet.Contains(peerId))
+                return MissingModPeerRole.NewGuest;
+            return MissingModPeerRole.ExistingTeammate;
+        }
+
+        public bool HasUnacknowledgedMissingModPeers =>
+            MissingModPeers.Keys.Any(id => !AcknowledgedMissingModIds.Contains(id));
+
+        public List<MissingModPeerInfo> GetSortedMissingModPeers() =>
+            MissingModPeers.Values
+                .OrderBy(p => p.Role)
+                .ThenBy(p => p.DisplayName, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+    }
+
+    internal static bool TryGetExpandedSession(SerializableRun run, out ExpandedSession session) =>
+        Expanded.TryGetValue(run, out session!);
     private readonly record struct QueuedGuest(ulong GuestId, CharacterModel? Character, SerializablePlayer? RestoredPlayer = null);
 
     internal const string FloatingButtonName = "MidRunJoinOverlayButton";
@@ -1187,7 +1225,8 @@ internal static class JoinLobby
         var resolvedFlow = guests.Count > 0 ? CatchUpRegistry.GetById(flowId) : CatchUpRegistry.GetById(NoneCatchUpFlow.FlowId);
         var candidate = Candidate.Prepare(checkpoint, guests, removedPlayerIds, resolvedFlow.Id);
         var guestIds = guests.Select(g => g.GuestId).ToArray();
-        Expanded.Add(candidate, new ExpandedSession(guestIds, resolvedFlow.Id));
+        var restoredIds = new HashSet<ulong>(guests.Where(g => g.RestoredPlayer != null).Select(g => g.GuestId));
+        Expanded.Add(candidate, new ExpandedSession(guestIds, restoredIds, resolvedFlow.Id));
         Log.Info($"[MidRunJoin] Prepared roster change: +{guests.Count} guest(s), -{removedPlayerIds?.Count ?? 0} removed -> {candidate.Players.Count} seats (flow={resolvedFlow.Id}).");
         menu.StartHost(candidate);
     }
@@ -1216,8 +1255,12 @@ internal static class JoinLobby
     [HarmonyPostfix, HarmonyPatch(typeof(LoadRunLobby), nameof(LoadRunLobby.IsAboutToBeginGame))]
     private static void RequireRoster(LoadRunLobby __instance, ref bool __result)
     {
-        if (__result && Expanded.TryGetValue(__instance.Run, out _))
+        if (__result && Expanded.TryGetValue(__instance.Run, out var session))
+        {
             __result = Compat.GetLobbyPlayerCount(__instance) == __instance.Run.Players.Count &&
                        __instance.Run.Players.All(p => __instance.IsPlayerReady(p.NetId));
+            if (__result && session.HasUnacknowledgedMissingModPeers && __instance.LobbyListener is Control)
+                __result = false;
+        }
     }
 }

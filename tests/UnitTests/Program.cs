@@ -225,7 +225,7 @@ void Check(bool condition, string name)
     Check(root.GetProperty("id").GetString() == "MidRunJoin", "manifest id == MidRunJoin");
     Check(root.GetProperty("has_dll").GetBoolean(), "manifest has_dll == true");
     Check(!root.GetProperty("has_pck").GetBoolean(), "manifest has_pck == false");
-    Check(root.GetProperty("affects_gameplay").GetBoolean(), "manifest affects_gameplay == true");
+    Check(!root.GetProperty("affects_gameplay").GetBoolean(), "manifest affects_gameplay == false");
     Check(!string.IsNullOrWhiteSpace(root.GetProperty("version").GetString()), "manifest version non-empty");
 
     string distDir = Path.Combine(projectRoot, "dist/MidRunJoin");

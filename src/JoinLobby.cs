@@ -343,10 +343,15 @@ internal static class JoinLobby
                 child.QueueFree();
             }
 
+            var stashedIds = new HashSet<ulong>(persistedStashes.Keys);
+            foreach (ulong sid in stagedStashes.Keys)
+                stashedIds.Add(sid);
+
             visibleFriends = SteamHelper.FilterFriends(
                 allFriends,
                 friendSearch?.Text,
-                onlineOnlyCheck?.ButtonPressed ?? false);
+                onlineOnlyCheck?.ButtonPressed ?? false,
+                stashedIds);
 
             if (selectedFriend.HasValue && !visibleFriends.Any(f => f.SteamId == selectedFriend.Value.SteamId))
             {
@@ -394,6 +399,12 @@ internal static class JoinLobby
                 rowContent.OffsetRight = -10;
                 rowBtn.AddChild(rowContent);
 
+                bool hasStash = TryGetValidStash(entry.SteamId) != null;
+                if (hasStash)
+                {
+                    rowContent.AddChild(VanillaUi.CreateSaveIcon(18));
+                }
+
                 var nameLbl = new Label
                 {
                     Text = entry.Name,
@@ -402,7 +413,7 @@ internal static class JoinLobby
                     MouseFilter = Control.MouseFilterEnum.Ignore,
                     TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis
                 };
-                VanillaUi.ApplyFont(nameLbl, FontType.Regular, 15, isSelected ? StsColors.gold : StsColors.cream);
+                VanillaUi.ApplyFont(nameLbl, FontType.Regular, 15, isSelected || hasStash ? StsColors.gold : StsColors.cream);
                 rowContent.AddChild(nameLbl);
 
                 Color statusColor = entry.IsPlayingSts2
@@ -411,7 +422,7 @@ internal static class JoinLobby
                 Color statusBg = entry.IsPlayingSts2
                     ? new Color(0.08f, 0.25f, 0.22f, 0.9f)
                     : (entry.IsOnline ? new Color(0.10f, 0.20f, 0.28f, 0.9f) : new Color(0.16f, 0.18f, 0.21f, 0.85f));
-                if (TryGetValidStash(entry.SteamId) != null)
+                if (hasStash)
                 {
                     rowContent.AddChild(VanillaUi.CreateBadgePill(
                         ModLoc.SavedProgressBadge,
@@ -419,7 +430,8 @@ internal static class JoinLobby
                         StsColors.gold,
                         12));
                 }
-                rowContent.AddChild(VanillaUi.CreateBadgePill(entry.StatusTag, statusBg, statusColor, 12));
+                if (!string.Equals(entry.StatusTag, ModLoc.SavedProgressBadge, StringComparison.Ordinal))
+                    rowContent.AddChild(VanillaUi.CreateBadgePill(entry.StatusTag, statusBg, statusColor, 12));
 
                 rowBtn.Pressed += () =>
                 {
@@ -452,9 +464,27 @@ internal static class JoinLobby
         {
             if (friendListBox == null)
                 return;
-            var activeIds = run.Players.Where(p => !removedIds.Contains(p.NetId)).Select(p => p.NetId)
-                .Concat(queued.Select(q => q.GuestId));
+            var activeIds = new HashSet<ulong>(
+                run.Players.Where(p => !removedIds.Contains(p.NetId)).Select(p => p.NetId)
+                    .Concat(queued.Select(q => q.GuestId)));
             allFriends = SteamHelper.GetCandidateFriends(activeIds);
+
+            // Ensure any stashed player (even if not in the host's Steam friends list) is immediately selectable.
+            var existingFriendIds = new HashSet<ulong>(allFriends.Select(f => f.SteamId));
+            foreach (ulong stashedId in stagedStashes.Keys.Concat(persistedStashes.Keys).Distinct())
+            {
+                if (stashedId == 0 || activeIds.Contains(stashedId) || !existingFriendIds.Add(stashedId))
+                    continue;
+                string displayName = SteamHelper.FormatPlayerIdentity(stashedId, SteamHelper.TryGetPlayerName(stashedId));
+                allFriends.Add(new SteamFriendEntry(
+                    stashedId,
+                    displayName,
+                    $"{displayName} · {ModLoc.SavedProgressBadge}",
+                    ModLoc.SavedProgressBadge,
+                    IsPlayingSts2: false,
+                    IsOnline: true));
+            }
+
             PopulateFriendList();
         }
 

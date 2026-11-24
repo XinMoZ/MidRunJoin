@@ -55,6 +55,12 @@ void Check(bool condition, string name)
     var onlineSearch = SteamHelper.FilterFriends(ranked, "zoe", onlineOnly: true);
     Check(onlineSearch.Count == 0, "onlineOnly excludes matching offline friend");
 
+    // Stashed players sort first AND stay visible even when onlineOnly is true
+    var withStashed = SteamHelper.FilterFriends(ranked, "", onlineOnly: true, stashedPlayerIds: new HashSet<ulong> { 100, 106 });
+    Check(withStashed[0].SteamId == 106 && withStashed[1].SteamId == 100,
+        $"stashed players should sort ahead of non-stashed friends, got: {string.Join(",", withStashed.Take(3).Select(f => f.SteamId))}");
+    Check(withStashed.Any(f => f.SteamId == 100), "offline stashed player remains visible when onlineOnly is true");
+
     // English locale verification
     ModLoc.LanguageOverride = "eng";
     var rankedEn = SteamHelper.RankAndFormatFriends(sample, new ulong[] { 104, 999 });

@@ -244,6 +244,80 @@ internal static class VanillaUi
     }
 
     private const string RandomCharacterIconPath = "res://images/ui/top_panel/character_icon_random_character.png";
+    private static Texture2D? _saveIconTexture;
+
+    /// <summary>
+    /// Creates a crisp antique-gold save icon (floppy disk silhouette in STS2 palette)
+    /// rendered procedurally so it has zero external asset dependencies across game versions.
+    /// </summary>
+    internal static TextureRect CreateSaveIcon(int size = 18)
+    {
+        var rect = new TextureRect
+        {
+            Name = "SaveProgressIcon",
+            CustomMinimumSize = new Vector2(size, size),
+            ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
+            StretchMode = TextureRect.StretchModeEnum.KeepAspectCentered,
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+            MouseFilter = Control.MouseFilterEnum.Ignore
+        };
+        try
+        {
+            rect.Texture = GetOrCreateSaveIconTexture();
+        }
+        catch
+        {
+            rect.Texture = null;
+        }
+        return rect;
+    }
+
+    private static Texture2D GetOrCreateSaveIconTexture()
+    {
+        if (_saveIconTexture != null)
+            return _saveIconTexture;
+
+        // 16x16 floppy-disk save icon: '.' transparent, '#' dark outline, 'G' gold body, 'C' cream label/shutter
+        string[] pattern =
+        [
+            "................",
+            ".############...",
+            ".#GG#CCCC#GG##..",
+            ".#GG#CCGC#GGG##.",
+            ".#GG#CCCC#GGGG#.",
+            ".#GG######GGGG#.",
+            ".#GGGGGGGGGGGG#.",
+            ".#GGGGGGGGGGGG#.",
+            ".#GG########GG#.",
+            ".#GG#CCCCCC#GG#.",
+            ".#GG#CGGGG#GG#..",
+            ".#GG#CCCCCC#GG#.",
+            ".#GG#CCCCCC#GG#.",
+            ".#GG########GG#.",
+            ".##############.",
+            "................"
+        ];
+
+        var img = Image.CreateEmpty(16, 16, false, Image.Format.Rgba8);
+        for (int y = 0; y < 16; y++)
+        {
+            string row = pattern[y];
+            for (int x = 0; x < 16; x++)
+            {
+                char ch = x < row.Length ? row[x] : '.';
+                Color c = ch switch
+                {
+                    '#' => TextOutline,
+                    'G' => StsColors.gold,
+                    'C' => StsColors.cream,
+                    _ => Colors.Transparent
+                };
+                img.SetPixel(x, y, c);
+            }
+        }
+        _saveIconTexture = ImageTexture.CreateFromImage(img);
+        return _saveIconTexture;
+    }
 
     internal static void SetCharacterIconTexture(TextureRect rect, CharacterModel? character)
     {

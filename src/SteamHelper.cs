@@ -28,20 +28,29 @@ internal static class SteamHelper
     internal static List<SteamFriendEntry> FilterFriends(
         IReadOnlyList<SteamFriendEntry> friends,
         string? query,
-        bool onlineOnly)
+        bool onlineOnly,
+        IReadOnlySet<ulong>? stashedPlayerIds = null)
     {
         string trimmed = (query ?? "").Trim();
-        var result = new List<SteamFriendEntry>(friends.Count);
+        var stashed = new List<SteamFriendEntry>();
+        var regular = new List<SteamFriendEntry>(friends.Count);
         foreach (var f in friends)
         {
-            if (onlineOnly && !f.IsOnline && !f.IsPlayingSts2)
+            bool isStashed = stashedPlayerIds != null && stashedPlayerIds.Contains(f.SteamId);
+            if (!isStashed && onlineOnly && !f.IsOnline && !f.IsPlayingSts2)
                 continue;
             if (trimmed.Length > 0 &&
                 !f.Name.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
                 continue;
-            result.Add(f);
+            if (isStashed)
+                stashed.Add(f);
+            else
+                regular.Add(f);
         }
-        return result;
+        if (stashed.Count == 0)
+            return regular;
+        stashed.AddRange(regular);
+        return stashed;
     }
 
     internal static List<SteamFriendEntry> RankAndFormatFriends(

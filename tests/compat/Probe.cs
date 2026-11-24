@@ -96,7 +96,8 @@ public partial class Probe : Node
             "NGame.LoadRun",
             "NMapPointHistoryHoverTip.Create",
             "NMultiplayerLoadGameScreen.InitializeAsHost",
-            "NMultiplayerSubmenu._Ready"
+            "NMultiplayerSubmenu._Ready",
+            "SaveManager.DeleteCurrentMultiplayerRun"
         ];
         foreach (string exp in expected)
         {

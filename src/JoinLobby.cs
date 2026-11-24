@@ -19,6 +19,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Platform;
 using MegaCrit.Sts2.Core.Platform.Steam;
 using MegaCrit.Sts2.Core.Saves;
+using MegaCrit.Sts2.Core.Saves.Runs;
 using MidRunJoin.CatchUp;
 
 namespace MidRunJoin;
@@ -27,7 +28,7 @@ namespace MidRunJoin;
 internal static class JoinLobby
 {
     internal sealed record ExpandedSession(ulong[] GuestIds, string FlowId);
-    private readonly record struct QueuedGuest(ulong GuestId, CharacterModel? Character);
+    private readonly record struct QueuedGuest(ulong GuestId, CharacterModel? Character, SerializablePlayer? RestoredPlayer = null);
 
     internal const string FloatingButtonName = "MidRunJoinOverlayButton";
     internal const string RosterModalName = "MidRunJoinRosterModal";
@@ -124,11 +125,39 @@ internal static class JoinLobby
         var queued = new List<QueuedGuest>();
         var queuedNames = new Dictionary<ulong, string>();
         var removedIds = new HashSet<ulong>();
+        var persistedStashes = PlayerStash.LoadForRun(run);
+        var stagedStashes = new Dictionary<ulong, StashedPlayerEntry>();
+        ulong? pendingRemoveConfirmId = null;
         var characters = ModelDb.AllCharacters.ToArray();
         int randomCharIndex = characters.Length;
         var flows = CatchUpRegistry.All;
         ulong hostId = run.Players.Count > 0 ? run.Players[0].NetId : 0;
         bool isSteamMode = SteamHelper.IsSteamReady && !CommandLineHelper.HasArg("fastmp");
+
+        StashedPlayerEntry? TryGetValidStash(ulong playerId)
+        {
+            if (stagedStashes.TryGetValue(playerId, out var staged))
+                return staged;
+            if (persistedStashes.TryGetValue(playerId, out var persisted))
+                return persisted;
+            return null;
+        }
+
+        CharacterModel? ResolveStashedCharacter(StashedPlayerEntry stash)
+        {
+            if (string.IsNullOrWhiteSpace(stash.CharacterId))
+                return null;
+            try
+            {
+                return ResolveCharacter(ModelId.Deserialize(stash.CharacterId), characters);
+            }
+            catch
+            {
+                return characters.FirstOrDefault(c =>
+                    stash.CharacterId.EndsWith("." + c.Id.Entry, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(stash.CharacterId, c.Id.Entry, StringComparison.OrdinalIgnoreCase));
+            }
+        }
 
         // Full-screen vanilla modal overlay with dark backstop
         var modalRoot = new Control
@@ -266,14 +295,27 @@ internal static class JoinLobby
         ulong lastFriendClickId = 0;
         ulong lastFriendClickMs = 0;
 
+        Action? tryAddSelectedOrInput = null;
+        Action<ulong?>? syncPickerForCandidateId = null;
+
         void UpdateSelectedFriendLabel()
         {
             if (selectedFriendLabel == null)
                 return;
             if (selectedFriend.HasValue)
             {
-                selectedFriendLabel.Text = ModLoc.SelectedFriendLabel(selectedFriend.Value.Name);
-                selectedFriendLabel.AddThemeColorOverride("font_color", StsColors.aqua);
+                var stash = TryGetValidStash(selectedFriend.Value.SteamId);
+                var stashedChar = stash != null ? ResolveStashedCharacter(stash) : null;
+                if (stashedChar != null)
+                {
+                    selectedFriendLabel.Text = ModLoc.RestoredCharacterLockedHint(selectedFriend.Value.Name, CharacterName(stashedChar));
+                    selectedFriendLabel.AddThemeColorOverride("font_color", StsColors.gold);
+                }
+                else
+                {
+                    selectedFriendLabel.Text = ModLoc.SelectedFriendLabel(selectedFriend.Value.Name);
+                    selectedFriendLabel.AddThemeColorOverride("font_color", StsColors.aqua);
+                }
             }
             else
             {
@@ -289,8 +331,6 @@ internal static class JoinLobby
             partyCountLabel.Text = ModLoc.PartyCountBadge(finalCount);
             SetStatusMessage(ModLoc.RosterSummary(kept, removedIds.Count, queued.Count, finalCount), isError: false);
         }
-
-        Action? tryAddSelectedOrInput = null;
 
         void PopulateFriendList()
         {
@@ -371,6 +411,14 @@ internal static class JoinLobby
                 Color statusBg = entry.IsPlayingSts2
                     ? new Color(0.08f, 0.25f, 0.22f, 0.9f)
                     : (entry.IsOnline ? new Color(0.10f, 0.20f, 0.28f, 0.9f) : new Color(0.16f, 0.18f, 0.21f, 0.85f));
+                if (TryGetValidStash(entry.SteamId) != null)
+                {
+                    rowContent.AddChild(VanillaUi.CreateBadgePill(
+                        ModLoc.SavedProgressBadge,
+                        new Color(0.28f, 0.22f, 0.08f, 0.95f),
+                        StsColors.gold,
+                        12));
+                }
                 rowContent.AddChild(VanillaUi.CreateBadgePill(entry.StatusTag, statusBg, statusColor, 12));
 
                 rowBtn.Pressed += () =>
@@ -383,6 +431,7 @@ internal static class JoinLobby
                     selectedFriend = entry;
                     if (manualSteamIdInput != null && !string.IsNullOrEmpty(manualSteamIdInput.Text))
                         manualSteamIdInput.Text = "";
+                    syncPickerForCandidateId?.Invoke(entry.SteamId);
                     UpdateSelectedFriendLabel();
                     if (isDoubleClick)
                     {
@@ -422,22 +471,25 @@ internal static class JoinLobby
                 var p = run.Players[i];
                 ulong pid = p.NetId;
                 bool isHost = pid == hostId;
-                bool isRemoved = removedIds.Contains(pid);
+                if (removedIds.Contains(pid))
+                    continue;
+
+                bool isConfirmingRemove = pendingRemoveConfirmId == pid;
                 var charModel = ResolveCharacter(p.CharacterId, characters);
                 string charName = charModel != null ? CharacterName(charModel) : (p.CharacterId?.Entry ?? "?");
                 string displayName = SteamHelper.FormatPlayerIdentity(pid, SteamHelper.TryGetPlayerName(pid), i + 1);
 
                 var rowCard = new PanelContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
                 rowCard.AddThemeStyleboxOverride("panel", VanillaUi.MakeBox(
-                    isRemoved ? new Color(0.22f, 0.12f, 0.14f, 0.88f) : VanillaUi.RowBg,
-                    isRemoved ? new Color(0.75f, 0.30f, 0.30f, 0.85f) : (isHost ? VanillaUi.GoldBorder : VanillaUi.SubtleBorder),
+                    isConfirmingRemove ? new Color(0.20f, 0.14f, 0.15f, 0.92f) : VanillaUi.RowBg,
+                    isConfirmingRemove ? StsColors.gold : (isHost ? VanillaUi.GoldBorder : VanillaUi.SubtleBorder),
                     borderWidth: 1,
                     radius: 6,
                     padH: 10,
                     padV: 5));
 
                 var row = new HBoxContainer { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
-                row.AddThemeConstantOverride("separation", 10);
+                row.AddThemeConstantOverride("separation", 8);
                 rowCard.AddChild(row);
 
                 row.AddChild(VanillaUi.CreateCharacterIcon(charModel, 28));
@@ -454,7 +506,7 @@ internal static class JoinLobby
                     Text = displayName,
                     VerticalAlignment = VerticalAlignment.Center
                 };
-                VanillaUi.ApplyFont(nameLbl, FontType.Bold, 15, isRemoved ? VanillaUi.MutedText : StsColors.cream, outlineSize: 1);
+                VanillaUi.ApplyFont(nameLbl, FontType.Bold, 15, StsColors.cream, outlineSize: 1);
                 infoBox.AddChild(nameLbl);
 
                 var charLbl = new Label
@@ -462,7 +514,7 @@ internal static class JoinLobby
                     Text = $"·  {charName}",
                     VerticalAlignment = VerticalAlignment.Center
                 };
-                VanillaUi.ApplyFont(charLbl, FontType.Regular, 14, isRemoved ? VanillaUi.MutedText : (charModel?.NameColor ?? StsColors.cream));
+                VanillaUi.ApplyFont(charLbl, FontType.Regular, 14, charModel?.NameColor ?? StsColors.cream);
                 infoBox.AddChild(charLbl);
                 row.AddChild(infoBox);
 
@@ -474,36 +526,87 @@ internal static class JoinLobby
                         StsColors.gold,
                         fontSize: 12));
                 }
-                else
+                else if (isConfirmingRemove)
                 {
-                    if (isRemoved)
+                    // Secondary 3-button confirmation in the exact position of the Remove button:
+                    // Delete / Save Progress / Cancel
+                    var deleteBtn = new Button
                     {
-                        row.AddChild(VanillaUi.CreateBadgePill(
-                            ModLoc.RemovingBadge,
-                            new Color(0.35f, 0.12f, 0.14f, 0.95f),
-                            StsColors.red,
-                            fontSize: 12));
-                    }
-                    var toggleBtn = new Button
-                    {
-                        Name = $"RemoveExisting_{pid}",
-                        Text = isRemoved ? ModLoc.UndoRemoveButton : ModLoc.RemoveButton,
+                        Name = $"ConfirmDelete_{pid}",
+                        Text = ModLoc.ConfirmDeleteButton,
                         FocusMode = Control.FocusModeEnum.None
                     };
-                    if (isRemoved)
-                        VanillaUi.StyleSecondaryButton(toggleBtn, 13);
-                    else
-                        VanillaUi.StyleDangerSmallButton(toggleBtn, 13);
-
-                    toggleBtn.Pressed += () =>
+                    VanillaUi.StyleDangerSmallButton(deleteBtn, 13);
+                    deleteBtn.Pressed += () =>
                     {
-                        if (!removedIds.Remove(pid))
-                            removedIds.Add(pid);
+                        pendingRemoveConfirmId = null;
+                        removedIds.Add(pid);
                         RebuildExistingUi();
                         RefreshFriendPicker();
                         UpdateSummaryMessage();
                     };
-                    row.AddChild(toggleBtn);
+
+                    var stashBtn = new Button
+                    {
+                        Name = $"ConfirmStash_{pid}",
+                        Text = ModLoc.ConfirmStashButton,
+                        FocusMode = Control.FocusModeEnum.None
+                    };
+                    VanillaUi.StyleSecondaryButton(stashBtn, 13);
+                    stashBtn.Pressed += () =>
+                    {
+                        pendingRemoveConfirmId = null;
+                        stagedStashes[pid] = PlayerStash.CreateEntry(run, p);
+                        removedIds.Add(pid);
+                        RebuildExistingUi();
+                        RefreshFriendPicker();
+                        UpdateSummaryMessage();
+                    };
+
+                    var cancelRemoveBtn = new Button
+                    {
+                        Name = $"CancelRemove_{pid}",
+                        Text = ModLoc.CancelRemoveButton,
+                        FocusMode = Control.FocusModeEnum.None
+                    };
+                    VanillaUi.StyleButton(
+                        cancelRemoveBtn,
+                        VanillaUi.RowBg,
+                        VanillaUi.RowHoverBg,
+                        VanillaUi.InputBg,
+                        VanillaUi.SubtleBorder,
+                        StsColors.cream,
+                        fontSize: 13,
+                        fontType: FontType.Regular,
+                        radius: 6,
+                        padH: 10,
+                        padV: 4,
+                        outlineSize: 1);
+                    cancelRemoveBtn.Pressed += () =>
+                    {
+                        pendingRemoveConfirmId = null;
+                        RebuildExistingUi();
+                    };
+
+                    row.AddChild(deleteBtn);
+                    row.AddChild(stashBtn);
+                    row.AddChild(cancelRemoveBtn);
+                }
+                else
+                {
+                    var removeBtn = new Button
+                    {
+                        Name = $"RemoveExisting_{pid}",
+                        Text = ModLoc.RemoveButton,
+                        FocusMode = Control.FocusModeEnum.None
+                    };
+                    VanillaUi.StyleDangerSmallButton(removeBtn, 13);
+                    removeBtn.Pressed += () =>
+                    {
+                        pendingRemoveConfirmId = pid;
+                        RebuildExistingUi();
+                    };
+                    row.AddChild(removeBtn);
                 }
 
                 existingBox.AddChild(rowCard);
@@ -583,6 +686,7 @@ internal static class JoinLobby
                     UpdateSelectedFriendLabel();
                     PopulateFriendList();
                 }
+                syncPickerForCandidateId?.Invoke(TryParseGuestId(text, out ulong parsed) ? parsed : null);
             };
             addSection.AddChild(manualSteamIdInput);
         }
@@ -618,6 +722,10 @@ internal static class JoinLobby
                 SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
             };
             VanillaUi.StyleLineEdit(input, 14);
+            input.TextChanged += text =>
+            {
+                syncPickerForCandidateId?.Invoke(TryParseGuestId(text, out ulong parsed) ? parsed : null);
+            };
             inputRow.AddChild(input);
         }
 
@@ -641,6 +749,23 @@ internal static class JoinLobby
                 VanillaUi.SetRandomCharacterIconTexture(pickerCharIcon);
             else if (idx >= 0 && idx < characters.Length)
                 VanillaUi.SetCharacterIconTexture(pickerCharIcon, characters[(int)idx]);
+        };
+        syncPickerForCandidateId = candidateId =>
+        {
+            var stash = candidateId.HasValue ? TryGetValidStash(candidateId.Value) : null;
+            var stashedChar = stash != null ? ResolveStashedCharacter(stash) : null;
+            if (stashedChar != null)
+            {
+                int idx = Array.FindIndex(characters, c => c.Id == stashedChar.Id);
+                if (idx >= 0)
+                    picker.Selected = idx;
+                VanillaUi.SetCharacterIconTexture(pickerCharIcon, stashedChar);
+                picker.Disabled = true;
+            }
+            else
+            {
+                picker.Disabled = false;
+            }
         };
         inputRow.AddChild(picker);
 
@@ -726,10 +851,11 @@ internal static class JoinLobby
                 VanillaUi.ApplyFont(nameLbl, FontType.Regular, 14, StsColors.cream);
                 row.AddChild(nameLbl);
 
+                bool isRestored = g.RestoredPlayer != null;
                 row.AddChild(VanillaUi.CreateBadgePill(
-                    ModLoc.NewGuestBadge,
-                    new Color(0.08f, 0.26f, 0.22f, 0.95f),
-                    StsColors.aqua,
+                    isRestored ? ModLoc.RestoredGuestBadge : ModLoc.NewGuestBadge,
+                    isRestored ? new Color(0.28f, 0.22f, 0.08f, 0.95f) : new Color(0.08f, 0.26f, 0.22f, 0.95f),
+                    isRestored ? StsColors.gold : StsColors.aqua,
                     fontSize: 12));
 
                 var rm = new Button
@@ -793,10 +919,22 @@ internal static class JoinLobby
                 return false;
             }
 
-            CharacterModel? chosenChar = picker.Selected == randomCharIndex
-                ? null
-                : characters[Math.Clamp(picker.Selected, 0, characters.Length - 1)];
-            queued.Add(new QueuedGuest(id, chosenChar));
+            var stash = TryGetValidStash(id);
+            SerializablePlayer? restoredPlayer = stash != null ? PlayerStash.DeserializePlayer(stash) : null;
+            CharacterModel? chosenChar;
+            if (restoredPlayer != null)
+            {
+                chosenChar = ResolveCharacter(restoredPlayer.CharacterId, characters)
+                    ?? characters[Math.Clamp(picker.Selected, 0, characters.Length - 1)];
+            }
+            else
+            {
+                chosenChar = picker.Selected == randomCharIndex
+                    ? null
+                    : characters[Math.Clamp(picker.Selected, 0, characters.Length - 1)];
+            }
+
+            queued.Add(new QueuedGuest(id, chosenChar, restoredPlayer));
             queuedNames[id] = displayName;
             if (isSteamMode)
             {
@@ -809,6 +947,7 @@ internal static class JoinLobby
             {
                 input.Text = "";
             }
+            picker.Disabled = false;
             RebuildQueueUi();
             RefreshFriendPicker();
             UpdateSummaryMessage();
@@ -934,11 +1073,15 @@ internal static class JoinLobby
             }
             try
             {
+                if (stagedStashes.Count > 0)
+                    PlayerStash.SaveForRun(run, stagedStashes.Values);
+
                 string flowId = queued.Count > 0 ? flows[Math.Max(0, flowPicker.Selected)].Id : NoneCatchUpFlow.FlowId;
                 var resolvedGuests = queued
                     .Select(g => new GuestSpec(
                         g.GuestId,
-                        g.Character ?? characters[Random.Shared.Next(characters.Length)]))
+                        g.Character ?? characters[Random.Shared.Next(characters.Length)],
+                        g.RestoredPlayer))
                     .ToArray();
                 StartExpandedLobby(__instance, run, resolvedGuests, flowId, removedIds.ToArray());
                 CloseModal();

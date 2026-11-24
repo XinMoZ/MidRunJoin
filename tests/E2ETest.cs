@@ -124,11 +124,14 @@ internal static class E2ETest
 
             if (_phase == "phase3")
             {
-                // Phase 3: test removing absent player 4 (4P -> 3P) via GUI button!
+                // Phase 3: test removing absent player 4 (4P -> 3P) via 2-step GUI button (Remove -> Delete)!
                 var existingScroll = (ScrollContainer)dialog.FindChild("ExistingMembersScroll", recursive: true, owned: false);
                 var remove4 = existingScroll.FindChild("RemoveExisting_4", recursive: true, owned: false) as Button;
                 Require(remove4 != null, "Phase3 missing RemoveExisting_4 button");
                 remove4!.EmitSignal(BaseButton.SignalName.Pressed);
+                var confirmDelete4 = existingScroll.FindChild("ConfirmDelete_4", recursive: true, owned: false) as Button;
+                Require(confirmDelete4 != null, "Phase3 missing ConfirmDelete_4 button");
+                confirmDelete4!.EmitSignal(BaseButton.SignalName.Pressed);
                 Log.Info("[MidRunJoinE2E] Phase3 host removing absent peer 4 (4P -> 3P)");
                 confirmBtn.EmitSignal(BaseButton.SignalName.Pressed);
                 Require(!dialog.Visible, "Phase3 dialog remained visible after Confirm");

@@ -507,16 +507,39 @@ public static class FixtureTest
         Require(panel.CustomMinimumSize.Y is >= 320 and <= 780, $"Dialog height unexpectedly inflated: {panel.CustomMinimumSize}");
         Require(confirmBtn.Visible, "Dialog Confirm button must be visible");
 
-        // Verify existing member removal toggle exists for non-host player 2 (and not for host player 1)
+        // Verify 2-step remove menu (Delete / Save Progress / Cancel) exists for non-host player 2 (and not for host player 1)
         var existingScroll = (ScrollContainer)dialog.FindChild("ExistingMembersScroll", recursive: true, owned: false);
         var removeP2Btn = existingScroll.FindChild("RemoveExisting_2", recursive: true, owned: false) as Button;
         Require(removeP2Btn != null, "RemoveExisting_2 button missing");
         Require(existingScroll.FindChild("RemoveExisting_1", recursive: true, owned: false) == null, "Host must not have remove button");
         removeP2Btn!.EmitSignal(BaseButton.SignalName.Pressed);
-        // Undo removal cleanly
-        removeP2Btn = existingScroll.FindChild("RemoveExisting_2", recursive: true, owned: false) as Button;
-        Require(removeP2Btn != null && (removeP2Btn.Text.Contains("撤销") || removeP2Btn.Text.Contains("Undo")), "Remove toggle did not switch to Undo");
-        removeP2Btn!.EmitSignal(BaseButton.SignalName.Pressed);
+
+        var confirmDelP2 = existingScroll.FindChild("ConfirmDelete_2", recursive: true, owned: false) as Button;
+        var confirmStashP2 = existingScroll.FindChild("ConfirmStash_2", recursive: true, owned: false) as Button;
+        var cancelRemoveP2 = existingScroll.FindChild("CancelRemove_2", recursive: true, owned: false) as Button;
+        Require(confirmDelP2 != null && confirmStashP2 != null && cancelRemoveP2 != null,
+            "Secondary 3-button remove menu (Delete / Save Progress / Cancel) missing");
+
+        // Cancel secondary menu restores RemoveExisting_2
+        cancelRemoveP2!.EmitSignal(BaseButton.SignalName.Pressed);
+        Require(existingScroll.FindChild("RemoveExisting_2", recursive: true, owned: false) != null,
+            "CancelRemove_2 did not restore RemoveExisting_2");
+
+        // Test Save Progress -> player disappears from upper list -> re-entering their ID locks character picker!
+        (existingScroll.FindChild("RemoveExisting_2", recursive: true, owned: false) as Button)!.EmitSignal(BaseButton.SignalName.Pressed);
+        (existingScroll.FindChild("ConfirmStash_2", recursive: true, owned: false) as Button)!.EmitSignal(BaseButton.SignalName.Pressed);
+        Require(existingScroll.FindChild("RemoveExisting_2", recursive: true, owned: false) == null,
+            "Stashed player 2 should disappear from upper existing members list");
+        var stashTestInputRow = (HBoxContainer)dialog.FindChild("GuestInputRow", recursive: true, owned: false);
+        var stashTestInput = stashTestInputRow.GetChildren().OfType<LineEdit>().Single();
+        var stashTestPicker = stashTestInputRow.GetChildren().OfType<OptionButton>().Single();
+        stashTestInput.Text = "2";
+        stashTestInput.EmitSignal(LineEdit.SignalName.TextChanged, "2");
+        Require(stashTestPicker.Disabled, "Character picker must lock when selecting a stashed player");
+        stashTestInput.Text = "3";
+        stashTestInput.EmitSignal(LineEdit.SignalName.TextChanged, "3");
+        Require(!stashTestPicker.Disabled, "Character picker must unlock when selecting a fresh player");
+
         cancelBtn.EmitSignal(BaseButton.SignalName.Pressed);
         Require(!dialog.Visible, "Cancel button did not close modal");
 
@@ -576,14 +599,77 @@ public static class FixtureTest
         var rmBtn4 = rmScroll.FindChild("RemoveExisting_4", recursive: true, owned: false) as Button;
         Require(rmBtn2 != null && rmBtn3 != null && rmBtn4 != null, "4P dialog missing RemoveExisting buttons for seats 2/3/4");
         rmBtn2!.EmitSignal(BaseButton.SignalName.Pressed);
+        (rmScroll.FindChild("ConfirmDelete_2", recursive: true, owned: false) as Button)!.EmitSignal(BaseButton.SignalName.Pressed);
+        Require(rmScroll.FindChild("RemoveExisting_2", recursive: true, owned: false) == null,
+            "Deleted seat 2 should be removed from upper list");
         // Re-fetch after RebuildExistingUi and remove a 2nd player (seat 3)
         rmBtn3 = rmScroll.FindChild("RemoveExisting_3", recursive: true, owned: false) as Button;
         Require(rmBtn3 != null, "RemoveExisting_3 disappeared after removing seat 2");
         rmBtn3!.EmitSignal(BaseButton.SignalName.Pressed);
+        (rmScroll.FindChild("ConfirmDelete_3", recursive: true, owned: false) as Button)!.EmitSignal(BaseButton.SignalName.Pressed);
         var rmMsg = (Label)rmDialog.FindChild("StatusLabel", recursive: true, owned: false);
         Require(rmMsg.Text.Contains("移除 2") || rmMsg.Text.Contains("Removing 2"), $"Multi-remove summary mismatch: {rmMsg.Text}");
         var rmCancelBtn = (Button)rmDialog.FindChild("CancelButton", recursive: true, owned: false);
         rmCancelBtn.EmitSignal(BaseButton.SignalName.Pressed);
+
+        // 4. Stash fingerprint validation + delta catch-up rewards + cleanup on DeleteCurrentMultiplayerRun
+        var stashType = typeof(MidRunJoin.Entry).Assembly.GetType("MidRunJoin.PlayerStash")!;
+        var createEntry = AccessTools.Method(stashType, "CreateEntry")!;
+        var saveForRun = AccessTools.Method(stashType, "SaveForRun")!;
+        var loadForRun = AccessTools.Method(stashType, "LoadForRun")!;
+        var deserializePlayer = AccessTools.Method(stashType, "DeserializePlayer")!;
+        var clearStash = AccessTools.Method(stashType, "Clear")!;
+
+        clearStash.Invoke(null, null);
+        var cp3ForStash = InvokePrepare(checkpoint, [new GuestSpec(3, ModelDb.Character<Silent>())], null, NoneCatchUpFlow.FlowId);
+        cp3ForStash.Players[2].Gold = 321;
+        var stashedEntry = createEntry.Invoke(null, [cp3ForStash, cp3ForStash.Players[2]])!;
+        var entryList = Array.CreateInstance(stashedEntry.GetType(), 1);
+        entryList.SetValue(stashedEntry, 0);
+        saveForRun.Invoke(null, [cp3ForStash, entryList]);
+
+        // Matching run loads the stash; mismatched seed or start_time rejects it
+        var loadedMatching = (System.Collections.IDictionary)loadForRun.Invoke(null, [cp3ForStash])!;
+        Require(loadedMatching.Contains(3UL), "Matching run must load stashed player 3");
+        var diffSeedRun = CloneRun(cp3ForStash);
+        diffSeedRun.SerializableRng.Seed = "DIFFERENT_SEED";
+        Require(((System.Collections.IDictionary)loadForRun.Invoke(null, [diffSeedRun])!).Count == 0,
+            "Mismatched seed must reject stashed player");
+        var diffTimeRun = CloneRun(cp3ForStash);
+        diffTimeRun.StartTime += 999;
+        Require(((System.Collections.IDictionary)loadForRun.Invoke(null, [diffTimeRun])!).Count == 0,
+            "Mismatched StartTime must reject stashed player");
+
+        // Advance host-only run by 2 new floors (1 Monster + 1 Elite) without player 3, then restore player 3
+        var progressedRun = InvokePrepare(cp3ForStash, [], [3UL]);
+        var newMonster = new MapPointHistoryEntry { MapPointType = MapPointType.Monster };
+        newMonster.Rooms.Add(new MapPointRoomHistoryEntry { RoomType = RoomType.Monster });
+        newMonster.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = 1 });
+        newMonster.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = 2 });
+        var newElite = new MapPointHistoryEntry { MapPointType = MapPointType.Elite };
+        newElite.Rooms.Add(new MapPointRoomHistoryEntry { RoomType = RoomType.Elite });
+        newElite.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = 1 });
+        newElite.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = 2 });
+        progressedRun.MapPointHistory[0].Add(newMonster);
+        progressedRun.MapPointHistory[0].Add(newElite);
+
+        var restoredPlayerData = (SerializablePlayer)deserializePlayer.Invoke(null, [stashedEntry])!;
+        var restoredCand = InvokePrepare(progressedRun, [new GuestSpec(3, ModelDb.Character<Silent>(), restoredPlayerData)], null, HistoryBellCatchUpFlow.FlowId);
+        var restoredState = RunState.FromSerializable(restoredCand);
+        var restoredP3 = restoredState.GetPlayer(3)!;
+        Require(restoredP3.Gold == 321, $"Restored player 3 gold mismatch: expected 321, got {restoredP3.Gold}");
+        Require(CatchUpCoordinator.TryConsumeMarker(restoredP3, out string restoredFlowId, out bool isRestored)
+                && restoredFlowId == HistoryBellCatchUpFlow.FlowId && isRestored,
+            "Restored player 3 must carry restored delta catch-up marker");
+        // Delta rewards should ONLY count the missed Monster room (newElite is the boundary floor they're entering)
+        var deltaCounts = CatchUpHistoryScanner.Scan(restoredState, excludePlayerPresentId: 3UL);
+        Require(deltaCounts.MonsterCombats == 1 && deltaCounts.AncientRooms == 0,
+            $"Delta catch-up should only include missed rooms since stash (got {deltaCounts})");
+
+        // Deleting multiplayer run must automatically clear the stash via Harmony postfix
+        SaveManager.Instance.DeleteCurrentMultiplayerRun();
+        Require(((System.Collections.IDictionary)loadForRun.Invoke(null, [cp3ForStash])!).Count == 0,
+            "DeleteCurrentMultiplayerRun must clear stashed player cache");
 
         Log.Info($"[MidRunJoinSmoke] PASS: MultiGuestDialog + MultiRemoveGUI (3={expectedGuest3Char}, 4={expectedGuest4Char}, {checkCount} checks)");
     }

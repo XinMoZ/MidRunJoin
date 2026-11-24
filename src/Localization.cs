@@ -70,8 +70,16 @@ internal static class ModLoc
     internal static string MemberBadge => Pick("原成员", "Member");
     internal static string RemovingBadge => Pick("将移除", "Removing");
     internal static string NewGuestBadge => Pick("新增", "New");
+    internal static string RestoredGuestBadge => Pick("恢复进度", "Restore");
+    internal static string SavedProgressBadge => Pick("已存进度", "Saved");
     internal static string RemoveButton => Pick("移除", "Remove");
+    internal static string ConfirmDeleteButton => Pick("删除", "Delete");
+    internal static string ConfirmStashButton => Pick("保存进度", "Save Progress");
+    internal static string CancelRemoveButton => Pick("取消", "Cancel");
     internal static string UndoRemoveButton => Pick("撤销移除", "Undo");
+    internal static string RestoredCharacterLockedHint(string name, string charName) => Pick(
+        $"已选择：{name}（已保留进度，锁定为 {charName}）",
+        $"Selected: {name} (saved progress, locked to {charName})");
 
     internal static string UnnamedPlayer(int seatNumber) => seatNumber > 0
         ? Pick($"玩家 #{seatNumber}", $"Player #{seatNumber}")

@@ -1,5 +1,5 @@
 param(
-    [string]$GameDir = 'E:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2',
+    [string]$GameDir = $(if ($env:STS2_GAME_DIR) { $env:STS2_GAME_DIR } else { 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2' }),
     [string]$GuestChar = 'SILENT',
     [switch]$SkipE2E
 )

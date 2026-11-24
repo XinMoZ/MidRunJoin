@@ -159,7 +159,7 @@ void Check(bool condition, string name)
     Console.WriteLine($"PASS: SteamHelper.TryInviteGuest ({checks} checks)");
 }
 
-// 4. Performance micro-benchmark for friend ranking (inspired by AstralEmotes/tests/PerformanceTests.cs)
+// 4. Performance micro-benchmark for friend ranking
 {
     var largeList = Enumerable.Range(1, 200)
         .Select(i => new RawFriendInfo((ulong)(76561198000000000 + i), $"Friend_{i:D3}", i % 10 == 0, i % 3 != 0))

@@ -1,6 +1,6 @@
 param(
-    [string]$GameDir = 'E:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2',
-    [string]$RuntimeDir = 'D:\Work\STS2mods\.codex_tmp\midrun-runtime',
+    [string]$GameDir = $(if ($env:STS2_GAME_DIR) { $env:STS2_GAME_DIR } else { 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2' }),
+    [string]$RuntimeDir = $(if ($env:STS2_TEST_RUNTIME_DIR) { $env:STS2_TEST_RUNTIME_DIR } else { Join-Path (Split-Path $PSScriptRoot) '.build/runtime' }),
     [string]$GuestChar = 'SILENT',
     [string]$Guest4Char = 'DEFECT',
     [int]$Phase1TimeoutSeconds = 240,

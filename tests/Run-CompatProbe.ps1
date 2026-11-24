@@ -1,5 +1,5 @@
 param(
-    [string]$GameDir = 'E:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2',
+    [string]$GameDir = $(if ($env:STS2_GAME_DIR) { $env:STS2_GAME_DIR } else { 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2' }),
     [string]$GodotPath = (Join-Path $PSScriptRoot '../../tools/megadot/MegaDot_v4.5.1-stable_mono_win64_console.exe'),
     [string]$DotnetRoot = 'C:/Program Files/dotnet'
 )
@@ -26,7 +26,7 @@ try {
     dotnet build (Join-Path $PSScriptRoot 'compat/CompatibilityProbe.csproj') -c Debug --ignore-failed-sources
     if ($LASTEXITCODE -ne 0) { throw "CompatibilityProbe build failed" }
 
-    # Isolate .NET 9 runtime (learned from AstralEmotes: older Harmony cannot run under .NET 10)
+    # Isolate .NET 9 runtime (older Harmony cannot run under .NET 10)
     $runtime = Get-ChildItem -LiteralPath (Join-Path $DotnetRoot 'shared/Microsoft.NETCore.App') -Directory |
         Where-Object Name -Like '9.*' | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
     $hostFxr = Get-ChildItem -LiteralPath (Join-Path $DotnetRoot 'host/fxr') -Directory |

@@ -32,6 +32,17 @@ $pck = Join-Path $GameDir 'SlayTheSpire2.pck'
 if (!(Test-Path $exe)) { throw "Missing isolated runtime exe: $exe" }
 if (!(Test-Path $pck)) { throw "Missing game pck: $pck" }
 
+# Keep isolated runtime assemblies synced with $GameDir whenever Steam switches between public and public-beta.
+$srcDll = Join-Path $GameDir 'data_sts2_windows_x86_64/sts2.dll'
+$dstDll = Join-Path $RuntimeDir 'data_sts2_windows_x86_64/sts2.dll'
+if ((Test-Path $srcDll) -and (!(Test-Path $dstDll) -or (Get-FileHash $srcDll -Algorithm SHA256).Hash -ne (Get-FileHash $dstDll -Algorithm SHA256).Hash)) {
+    Write-Host "  Syncing isolated runtime assemblies from $GameDir..."
+    Copy-Item -Recurse -Force (Join-Path $GameDir 'data_sts2_windows_x86_64/*') (Join-Path $RuntimeDir 'data_sts2_windows_x86_64')
+    if (Test-Path (Join-Path $GameDir 'release_info.json')) {
+        Copy-Item -Force (Join-Path $GameDir 'release_info.json') $RuntimeDir
+    }
+}
+
 $profileDir = Join-Path $workRoot 'profile'
 $dest = Join-Path $profileDir 'SlayTheSpire2/default/1'
 [void][IO.Directory]::CreateDirectory($dest)

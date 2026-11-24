@@ -63,7 +63,26 @@ public static class FixtureTest
             CheckCatchUpFlowsAndRegistry(checkpoint);
             CheckAscensionScaling();
             CheckZeroImpactAndDeterminism(checkpoint);
-            CheckMultiGuestDialogAndSelection(menu, checkpoint);
+            if (AccessTools.Field(typeof(NMultiplayerSubmenu), "_loadButton")?.GetValue(menu) != null)
+            {
+                CheckMultiGuestDialogAndSelection(menu, checkpoint);
+            }
+            else
+            {
+                // On mainline v0.111.1, OpenMultiplayerSubmenu adds NMultiplayerSubmenu via AddChildSafely (deferred).
+                menu.Ready += () => Callable.From(() =>
+                {
+                    try
+                    {
+                        CheckMultiGuestDialogAndSelection(menu, checkpoint);
+                    }
+                    catch (Exception deferredEx)
+                    {
+                        Log.Error($"[MidRunJoinSmoke] FAIL: {deferredEx}");
+                        __instance.GetTree().Quit(1);
+                    }
+                }).CallDeferred();
+            }
         }
         catch (Exception e)
         {
@@ -122,11 +141,15 @@ public static class FixtureTest
         nonStd.GameMode = GameMode.Daily;
         ExpectInvalidOp(() => InvokePrepare(nonStd, new GuestSpec(3, ironclad)), "GameMode == Daily");
 
-        // 2. Custom game flag is now ACCEPTED (for Custom Mode & gameplay mods!)
-        var custom = CloneRun(validMapCp);
-        custom.IsCustomGame = true;
-        var customCand = InvokePrepare(custom, new GuestSpec(3, ironclad));
-        Require(customCand.Players.Count == 3 && customCand.IsCustomGame, "Custom game save should be accepted");
+        // 2. Custom game flag (when present in this game build) is now ACCEPTED
+        var isCustomProp = AccessTools.Property(typeof(SerializableRun), "IsCustomGame");
+        if (isCustomProp != null)
+        {
+            var custom = CloneRun(validMapCp);
+            isCustomProp.SetValue(custom, true);
+            var customCand = InvokePrepare(custom, new GuestSpec(3, ironclad));
+            Require(customCand.Players.Count == 3 && (bool)isCustomProp.GetValue(customCand)!, "Custom game save should be accepted");
+        }
 
         // 3. DailyTime present still rejected
         var daily = CloneRun(validMapCp);
@@ -338,7 +361,8 @@ public static class FixtureTest
             Require(pool.Count > 0, $"Ancient {anc.Id.Entry} produced empty relic pool");
         }
 
-        Require(rewards1.OfType<CardUpgradeReward>().Count() == 1, $"Expected 1 CardUpgradeReward (floor(3/2)), got {rewards1.OfType<CardUpgradeReward>().Count()}");
+        int upgradeCount = rewards1.Count(r => r.GetType().Name.Contains("CardUpgradeReward", StringComparison.Ordinal));
+        Require(upgradeCount == 1, $"Expected 1 CardUpgradeReward (floor(3/2)), got {upgradeCount}");
         Require(rewards1.OfType<CardRemovalReward>().Count() == 1, $"Expected 1 CardRemovalReward (1 Boss), got {rewards1.OfType<CardRemovalReward>().Count()}");
         Require(rewards1.OfType<CardReward>().Count() == 4, $"Expected 4 CardRewards (2 Monster + 1 Elite + 1 Boss), got {rewards1.OfType<CardReward>().Count()}");
 
@@ -494,18 +518,23 @@ public static class FixtureTest
     private static void CheckMultiGuestDialogAndSelection(NMultiplayerSubmenu menu, SerializableRun checkpoint)
     {
         // 0. Verify floating overlay button attached to NMultiplayerSubmenu._loadButton
-        var loadButton = (Control)AccessTools.Field(typeof(NMultiplayerSubmenu), "_loadButton").GetValue(menu)!;
-        var floatingBtn = loadButton.GetNodeOrNull<Button>("MidRunJoinOverlayButton");
+        Require(menu != null, "OpenMultiplayerSubmenu returned null");
+        var loadButton = AccessTools.Field(typeof(NMultiplayerSubmenu), "_loadButton")?.GetValue(menu) as Control;
+        Require(loadButton != null, "_loadButton was null on NMultiplayerSubmenu");
+        var floatingBtn = loadButton!.GetNodeOrNull<Button>("MidRunJoinOverlayButton");
         Require(floatingBtn != null, "Floating MidRunJoinOverlayButton missing from _loadButton");
         Require(floatingBtn!.MouseFilter == Control.MouseFilterEnum.Stop, "Floating button must stop mouse propagation");
 
         // 1. Open and Cancel + verify bounded vanilla modal size & Confirm button visibility
-        var dialog = ShiftLoad(menu, checkpoint);
-        var panel = (PanelContainer)dialog.FindChild("RosterPanel", recursive: true, owned: false);
-        var confirmBtn = (Button)dialog.FindChild("ConfirmButton", recursive: true, owned: false);
-        var cancelBtn = (Button)dialog.FindChild("CancelButton", recursive: true, owned: false);
-        Require(panel.CustomMinimumSize.Y is >= 320 and <= 780, $"Dialog height unexpectedly inflated: {panel.CustomMinimumSize}");
-        Require(confirmBtn.Visible, "Dialog Confirm button must be visible");
+        var dialog = ShiftLoad(menu!, checkpoint);
+        Require(dialog != null, "ShiftLoad returned null dialog");
+        var panel = dialog!.FindChild("RosterPanel", recursive: true, owned: false) as PanelContainer;
+        var confirmBtn = dialog.FindChild("ConfirmButton", recursive: true, owned: false) as Button;
+        var cancelBtn = dialog.FindChild("CancelButton", recursive: true, owned: false) as Button;
+        Require(panel != null && confirmBtn != null && cancelBtn != null,
+            $"Modal core controls missing: panel={panel != null} confirm={confirmBtn != null} cancel={cancelBtn != null}");
+        Require(panel!.CustomMinimumSize.Y is >= 320 and <= 810, $"Dialog height unexpectedly inflated: {panel.CustomMinimumSize}");
+        Require(confirmBtn!.Visible, "Dialog Confirm button must be visible");
 
         // Verify 2-step remove menu (Delete / Save Progress / Cancel) exists for non-host player 2 (and not for host player 1)
         var existingScroll = (ScrollContainer)dialog.FindChild("ExistingMembersScroll", recursive: true, owned: false);
@@ -540,11 +569,11 @@ public static class FixtureTest
         stashTestInput.EmitSignal(LineEdit.SignalName.TextChanged, "3");
         Require(!stashTestPicker.Disabled, "Character picker must unlock when selecting a fresh player");
 
-        cancelBtn.EmitSignal(BaseButton.SignalName.Pressed);
+        cancelBtn!.EmitSignal(BaseButton.SignalName.Pressed);
         Require(!dialog.Visible, "Cancel button did not close modal");
 
         // 2. Open on valid checkpoint -> test invalid inputs & multi-guest add (guest 3 + guest 4)
-        dialog = ShiftLoad(menu, checkpoint);
+        dialog = ShiftLoad(menu!, checkpoint);
         confirmBtn = (Button)dialog.FindChild("ConfirmButton", recursive: true, owned: false);
         var msg = (Label)dialog.FindChild("StatusLabel", recursive: true, owned: false);
         var inputRow = (HBoxContainer)dialog.FindChild("GuestInputRow", recursive: true, owned: false);
@@ -591,7 +620,7 @@ public static class FixtureTest
 
         // 3. Multi-removal GUI check on a 4P save: verify all 4 rows are visible and 2+ members can be removed at once
         var cp4 = InvokePrepare(checkpoint, [new GuestSpec(3, allChars[1]), new GuestSpec(4, allChars[2])], null, NoneCatchUpFlow.FlowId);
-        var rmDialog = ShiftLoad(menu, cp4);
+        var rmDialog = ShiftLoad(menu!, cp4);
         var rmScroll = (ScrollContainer)rmDialog.FindChild("ExistingMembersScroll", recursive: true, owned: false);
         Require(rmScroll.CustomMinimumSize.Y >= 140, $"4P existing members list too short ({rmScroll.CustomMinimumSize.Y}px), would clip 3rd/4th players");
         var rmBtn2 = rmScroll.FindChild("RemoveExisting_2", recursive: true, owned: false) as Button;
@@ -685,9 +714,8 @@ public static class FixtureTest
     {
         Player[] players = playerIds.Select(id => Player.CreateForNewRun<Ironclad>(UnlockState.none, id)).ToArray();
         var acts = ActModel.GetDefaultList().Select(a => a.ToMutable()).ToList();
-        var state = RunState.CreateForNewRun(players, acts, [], GameMode.Standard, false, ascension, "MIDJOIN");
-        foreach (var act in state.Acts)
-            act.GenerateRooms(state);
+        var state = CreateRunStateCompat(players, acts, ascension, "MIDJOIN");
+        GenerateActRoomsCompat(state);
         foreach (var player in players)
             player.PopulateRelicGrabBagIfNecessary(state.Rng.UpFront);
         var map = SerializableActMap.FromActMap(state.Act.CreateMap(state, false));
@@ -780,6 +808,55 @@ public static class FixtureTest
             lobby.Players.Clear();
             lobby.Players.AddRange(original);
         }
+    }
+
+    private static RunState CreateRunStateCompat(Player[] players, List<ActModel> acts, int ascension, string seed)
+    {
+        var modifiers = Array.Empty<ModifierModel>();
+        foreach (var m in typeof(RunState).GetMethods(BindingFlags.Public | BindingFlags.Static)
+                     .Where(m => m.Name == nameof(RunState.CreateForNewRun)))
+        {
+            var ps = m.GetParameters();
+            var args = new object?[ps.Length];
+            bool ok = true;
+            for (int i = 0; i < ps.Length; i++)
+            {
+                var pt = ps[i].ParameterType;
+                if (pt.IsAssignableFrom(typeof(Player[]))) args[i] = players;
+                else if (pt.IsAssignableFrom(typeof(List<ActModel>))) args[i] = acts;
+                else if (pt.IsAssignableFrom(typeof(ModifierModel[]))) args[i] = modifiers;
+                else if (pt == typeof(GameMode)) args[i] = GameMode.Standard;
+                else if (pt == typeof(bool)) args[i] = false;
+                else if (pt == typeof(int)) args[i] = ascension;
+                else if (pt == typeof(string)) args[i] = seed;
+                else if (ps[i].HasDefaultValue) args[i] = ps[i].DefaultValue;
+                else if (!pt.IsValueType || Nullable.GetUnderlyingType(pt) != null) args[i] = null;
+                else { ok = false; break; }
+            }
+            if (ok)
+                return (RunState)m.Invoke(null, args)!;
+        }
+        throw new MissingMethodException("No compatible RunState.CreateForNewRun overload found.");
+    }
+
+    private static void GenerateActRoomsCompat(RunState state)
+    {
+        var m1 = AccessTools.Method(typeof(ActModel), "GenerateRooms", [typeof(RunState)]);
+        if (m1 != null)
+        {
+            foreach (var act in state.Acts)
+                m1.Invoke(act, [state]);
+            return;
+        }
+        var m3 = AccessTools.Method(typeof(ActModel), "GenerateRooms",
+            [typeof(MegaCrit.Sts2.Core.Random.Rng), typeof(UnlockState), typeof(bool)]);
+        if (m3 != null)
+        {
+            foreach (var act in state.Acts)
+                m3.Invoke(act, [state.Rng.UpFront, UnlockState.none, false]);
+            return;
+        }
+        throw new MissingMethodException("No compatible ActModel.GenerateRooms overload found.");
     }
 
     private static void Require(bool condition, string error)

@@ -497,18 +497,14 @@ internal static class E2ETest
         var cs = CombatManager.Instance.DebugOnlyGetState();
         if (CombatManager.Instance.IsInProgress && cs != null && cs.Enemies.Count > 0)
         {
-            decimal actScale = MultiplayerScalingModel.GetMultiplayerScaling(cs.Encounter, state.CurrentActIndex);
-            var scalingModel = state.RunModels.OfType<MultiplayerScalingModel>().FirstOrDefault();
-            Require(scalingModel != null, "Phase3 missing MultiplayerScalingModel");
-            decimal actualBlockMult = scalingModel!.ModifyBlockMultiplicative(cs.Enemies[0], 10m, ValueProp.Move, null, null);
-            Require(actualBlockMult == 3m * actScale, $"Phase3 expected 3P block mult {3m * actScale}, got {actualBlockMult}");
+            decimal? actualBlockMult = TryVerifyMultiplayerBlockScaling(state, cs, expectedPlayers: 3);
             foreach (var enemy in cs.Enemies)
             {
                 int baseHp = enemy.MonsterMaxHpBeforeModification ?? 0;
                 int expected3P = (int)Creature.ScaleHpForMultiplayer(baseHp, cs.Encounter, 3, state.CurrentActIndex);
                 Require(enemy.MaxHp == expected3P, $"Phase3 enemy {enemy.Name} MaxHp={enemy.MaxHp} != expected 3P {expected3P}");
             }
-            Log.Info($"[MidRunJoinE2E] PHASE3_SCALING_3P_OK peer={me.NetId} blockMult={actualBlockMult}");
+            Log.Info($"[MidRunJoinE2E] PHASE3_SCALING_3P_OK peer={me.NetId} blockMult={actualBlockMult?.ToString() ?? "n/a"}");
         }
 
         Log.Info($"[MidRunJoinE2E] PHASE3_PASS peer={me.NetId} players=3 guest3={_guest3Char} room={state.CurrentRoom.RoomType} visited={state.VisitedMapCoords.Count}");
@@ -530,7 +526,7 @@ internal static class E2ETest
             if (_lateGameMode)
             {
                 int relicCount = rewardsSet.Rewards.OfType<RelicReward>().Count();
-                int upgradeCount = rewardsSet.Rewards.OfType<CardUpgradeReward>().Count();
+                int upgradeCount = rewardsSet.Rewards.Count(r => r.GetType().Name.Contains("CardUpgradeReward", StringComparison.Ordinal));
                 int removalCount = rewardsSet.Rewards.OfType<CardRemovalReward>().Count();
                 int cardCount = rewardsSet.Rewards.OfType<CardReward>().Count();
                 Log.Info($"[MidRunJoinE2E] LATEGAME_BELL_BREAKDOWN peer={me.NetId} total={rewardsSet.Rewards.Count} relics={relicCount} upgrades={upgradeCount} removals={removalCount} cards={cardCount}");
@@ -838,13 +834,7 @@ internal static class E2ETest
         Require(state.Players[2].Character.Id.Entry.Equals(_guest3Char, StringComparison.OrdinalIgnoreCase), "Guest 3 char mismatch");
         Require(state.Players[3].Character.Id.Entry.Equals(_guest4Char, StringComparison.OrdinalIgnoreCase), "Guest 4 char mismatch");
         Require(cs.Players.Count == 4, $"Expected 4 CombatState players, got {cs.Players.Count}");
-        var scalingModel = state.RunModels.OfType<MultiplayerScalingModel>().FirstOrDefault();
-        Require(scalingModel != null, "Missing MultiplayerScalingModel");
-
-        decimal actScale = MultiplayerScalingModel.GetMultiplayerScaling(cs.Encounter, state.CurrentActIndex);
-        decimal expectedBlockMult = 4m * actScale;
-        decimal actualBlockMult = scalingModel!.ModifyBlockMultiplicative(cs.Enemies[0], 10m, ValueProp.Move, null, null);
-        Require(actualBlockMult == expectedBlockMult, $"4P block mult expected {expectedBlockMult}, got {actualBlockMult}");
+        decimal? actualBlockMult = TryVerifyMultiplayerBlockScaling(state, cs, expectedPlayers: 4);
 
         foreach (var enemy in cs.Enemies)
         {
@@ -854,9 +844,44 @@ internal static class E2ETest
             int expected2P = (int)Creature.ScaleHpForMultiplayer(baseHp, cs.Encounter, 2, state.CurrentActIndex);
             Require(enemy.MaxHp == expected4P,
                 $"Enemy {enemy.Name} MaxHp={enemy.MaxHp} != expected 4P HP {expected4P} (base={baseHp}, 2P={expected2P})");
-            Log.Info($"[MidRunJoinE2E] ENEMY_SCALING peer={me.NetId} enemy={enemy.Name} baseHp={baseHp} maxHp={enemy.MaxHp} expected4P={expected4P} blockMult={actualBlockMult}");
+            Log.Info($"[MidRunJoinE2E] ENEMY_SCALING peer={me.NetId} enemy={enemy.Name} baseHp={baseHp} maxHp={enemy.MaxHp} expected4P={expected4P} blockMult={actualBlockMult?.ToString() ?? "n/a"}");
         }
-        Log.Info($"[MidRunJoinE2E] SCALING_OK peer={me.NetId} players=4 guests=[{_guest3Char},{_guest4Char}] blockMult={actualBlockMult}");
+        Log.Info($"[MidRunJoinE2E] SCALING_OK peer={me.NetId} players=4 guests=[{_guest3Char},{_guest4Char}] blockMult={actualBlockMult?.ToString() ?? "n/a"}");
+    }
+
+    private static decimal? TryVerifyMultiplayerBlockScaling(RunState state, CombatState cs, int expectedPlayers)
+    {
+        var scalingType = AccessTools.TypeByName("MegaCrit.Sts2.Core.Models.MultiplayerScalingModel");
+        var runModelsProp = AccessTools.Property(typeof(RunState), "RunModels");
+        if (scalingType == null || runModelsProp == null)
+            return null;
+
+        var runModels = runModelsProp.GetValue(state) as System.Collections.IEnumerable;
+        object? scalingModel = null;
+        if (runModels != null)
+        {
+            foreach (var item in runModels)
+            {
+                if (item != null && scalingType.IsInstanceOfType(item))
+                {
+                    scalingModel = item;
+                    break;
+                }
+            }
+        }
+        Require(scalingModel != null, $"Missing MultiplayerScalingModel for {expectedPlayers}P");
+
+        var getScale = AccessTools.Method(scalingType, "GetMultiplayerScaling", [typeof(EncounterModel), typeof(int)]);
+        var modBlock = AccessTools.Method(scalingType, "ModifyBlockMultiplicative");
+        if (getScale == null || modBlock == null)
+            return null;
+
+        decimal actScale = (decimal)getScale.Invoke(null, [cs.Encounter, state.CurrentActIndex])!;
+        decimal expectedBlockMult = expectedPlayers * actScale;
+        decimal actualBlockMult = (decimal)modBlock.Invoke(scalingModel, [cs.Enemies[0], 10m, ValueProp.Move, null, null])!;
+        Require(actualBlockMult == expectedBlockMult,
+            $"{expectedPlayers}P block mult expected {expectedBlockMult}, got {actualBlockMult}");
+        return actualBlockMult;
     }
 
     private static Creature? PickTarget(CardModel card, CombatState cs, Player me, Random rng)

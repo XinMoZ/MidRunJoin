@@ -5,7 +5,7 @@
 **在《杀戮尖塔 2》联机存档中随时添加新朋友或移除缺席队友**
 
 [![Steam Workshop](https://img.shields.io/badge/Steam%20Workshop-3844124271-1b2838?logo=steam)](https://steamcommunity.com/sharedfiles/filedetails/?id=3844124271)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](MidRunJoin.json)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue)](MidRunJoin.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![STS2 Branches](https://img.shields.io/badge/STS2-public%20%26%20public--beta-orange)](#兼容性)
 
@@ -119,7 +119,7 @@ Release 产物（`MidRunJoin.dll` 与 `MidRunJoin.json`）会输出到 `dist/Mid
 
 | 文件 | 职责 |
 |---|---|
-| [MidRunJoin.json](MidRunJoin.json) | Mod 清单（`v0.5.0`，`affects_gameplay: false`） |
+| [MidRunJoin.json](MidRunJoin.json) | Mod 清单（`v0.5.1`，`affects_gameplay: false`） |
 | [src/Entry.cs](src/Entry.cs) | `ModInitializer` 入口与 Harmony 补丁注册 |
 | [src/JoinLobby.cs](src/JoinLobby.cs) | 悬浮按钮、全屏成员调整模态框、行内 3 按钮移除与大厅就绪校验 |
 | [src/MissingModWarning.cs](src/MissingModWarning.cs) | 房主端 `PeerVersionInfo` 探测、未安装玩家纵向列表弹窗、半透明 Toast 与 Safe-Sync 切换 |

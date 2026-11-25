@@ -5,7 +5,7 @@
 **Join friends mid-run or adjust your multiplayer party roster in *Slay the Spire 2***
 
 [![Steam Workshop](https://img.shields.io/badge/Steam%20Workshop-3844124271-1b2838?logo=steam)](https://steamcommunity.com/sharedfiles/filedetails/?id=3844124271)
-[![Version](https://img.shields.io/badge/version-0.5.0-blue)](MidRunJoin.json)
+[![Version](https://img.shields.io/badge/version-0.5.1-blue)](MidRunJoin.json)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![STS2 Branches](https://img.shields.io/badge/STS2-public%20%26%20public--beta-orange)](#compatibility)
 
@@ -119,7 +119,7 @@ Release output (`MidRunJoin.dll` + `MidRunJoin.json`) is staged to `dist/MidRunJ
 
 | Path | Responsibility |
 |---|---|
-| [MidRunJoin.json](MidRunJoin.json) | Mod manifest (`v0.5.0`, `affects_gameplay: false`) |
+| [MidRunJoin.json](MidRunJoin.json) | Mod manifest (`v0.5.1`, `affects_gameplay: false`) |
 | [src/Entry.cs](src/Entry.cs) | `ModInitializer` entry point and Harmony patch registration |
 | [src/JoinLobby.cs](src/JoinLobby.cs) | Floating entry button, roster editor modal, inline 3-button remove menu, lobby ready guard |
 | [src/MissingModWarning.cs](src/MissingModWarning.cs) | Host `PeerVersionInfo` detection, missing-mod modal with vertical player list, translucent toast, Safe-Sync downgrade |

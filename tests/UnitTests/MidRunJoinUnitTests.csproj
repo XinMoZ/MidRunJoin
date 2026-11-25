@@ -9,5 +9,6 @@
     <Compile Include="../../src/Localization.cs" Link="Localization.cs" />
     <Compile Include="../../src/SteamHelper.cs" Link="SteamHelper.cs" />
     <Compile Include="../../src/CatchUp/CatchUpStats.cs" Link="CatchUpStats.cs" />
+    <EmbeddedResource Include="../../localization/*.json" LogicalName="MidRunJoin.localization.%(Filename)%(Extension)" />
   </ItemGroup>
 </Project>

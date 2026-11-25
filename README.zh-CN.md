@@ -130,7 +130,8 @@ Release 产物（`MidRunJoin.dll` 与 `MidRunJoin.json`）会输出到 `dist/Mid
 | [src/Compat.cs](src/Compat.cs) | 正式版（`public`）与 `public-beta` 跨版本兼容层 |
 | [src/SteamHelper.cs](src/SteamHelper.cs) | Steam 好友列表、昵称解析、大厅邀请与 Steam Overlay 跳转 |
 | [src/VanillaUi.cs](src/VanillaUi.cs) | 原版风格 UI 样式与程序化存档图标 |
-| [src/Localization.cs](src/Localization.cs) | 中英双语本地化文本 |
+| [src/Localization.cs](src/Localization.cs) | 数据驱动本地化加载器（读取 `localization/*.json`，支持内嵌与外部覆盖） |
+| [localization/](localization/) | 独立 JSON 本地化文本表（[eng.json](localization/eng.json)、[zhs.json](localization/zhs.json)） |
 
 ---
 

@@ -130,7 +130,8 @@ Release output (`MidRunJoin.dll` + `MidRunJoin.json`) is staged to `dist/MidRunJ
 | [src/Compat.cs](src/Compat.cs) | Cross-version compatibility shims (`public` + `public-beta`) |
 | [src/SteamHelper.cs](src/SteamHelper.cs) | Steam friends listing, persona resolution, lobby invites, Steam Overlay web page |
 | [src/VanillaUi.cs](src/VanillaUi.cs) | Vanilla STS2 UI styling helpers & procedural save icon |
-| [src/Localization.cs](src/Localization.cs) | Bilingual (English / Chinese) localization strings |
+| [src/Localization.cs](src/Localization.cs) | Data-driven localization loader (`localization/*.json`, embedded + external overrides) |
+| [localization/](localization/) | Standalone JSON localization tables ([eng.json](localization/eng.json), [zhs.json](localization/zhs.json)) |
 
 ---
 

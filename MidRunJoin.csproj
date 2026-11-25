@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Compile Remove="tests/**/*.cs" />
+    <EmbeddedResource Include="localization/*.json" LogicalName="MidRunJoin.localization.%(Filename)%(Extension)" />
     <Reference Include="0Harmony" HintPath="$(GameData)/0Harmony.dll" Private="false" />
     <Reference Include="GodotSharp" HintPath="$(GameData)/GodotSharp.dll" Private="false" />
     <Reference Include="Steamworks.NET" HintPath="$(GameData)/Steamworks.NET.dll" Private="false" />

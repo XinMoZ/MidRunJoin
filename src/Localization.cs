@@ -1,187 +1,235 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Reflection;
+using System.Text.Json;
 using MegaCrit.Sts2.Core.Localization;
 
 namespace MidRunJoin;
 
 /// <summary>
-/// Bilingual (Chinese / English) localization helper that follows STS2's active <see cref="LocManager.Language"/>.
-/// Chinese is used for <c>zhs</c> / <c>zht</c>; English is used for <c>eng</c> and all other locales.
+/// Data-driven localization loader backed by standalone JSON tables under <c>localization/*.json</c>
+/// (embedded into the mod assembly, with optional external overrides in <c>&lt;modDir&gt;/localization/&lt;lang&gt;.json</c>).
+/// Follows STS2's active <see cref="LocManager.Language"/>, falling back from <c>zh*</c> to <c>zhs</c>
+/// and from any other language to <c>eng</c>.
 /// </summary>
 internal static class ModLoc
 {
+    private const string ResourcePrefix = "MidRunJoin.localization.";
+    private const string ResourceSuffix = ".json";
+    private const string DefaultLocale = "eng";
+
+    private static readonly Lazy<Dictionary<string, Dictionary<string, string>>> Tables = new(LoadAllTables);
+
     internal static string? LanguageOverride { get; set; }
 
-    internal static bool IsChinese
+    internal static string ActiveLanguage
     {
         get
         {
             string? lang = LanguageOverride ?? LocManager.Instance?.Language;
-            if (string.IsNullOrWhiteSpace(lang))
-                return false;
-            return lang.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+            return string.IsNullOrWhiteSpace(lang) ? DefaultLocale : lang.Trim().ToLowerInvariant();
         }
     }
 
-    internal static string Pick(string zh, string en) => IsChinese ? zh : en;
+    internal static bool IsChinese => ActiveLanguage.StartsWith("zh", StringComparison.OrdinalIgnoreCase);
+
+    internal static IReadOnlyDictionary<string, string> GetTable(string locale)
+    {
+        var all = Tables.Value;
+        string normalized = string.IsNullOrWhiteSpace(locale) ? DefaultLocale : locale.Trim().ToLowerInvariant();
+        if (all.TryGetValue(normalized, out var exact))
+            return exact;
+        if (normalized.StartsWith("zh", StringComparison.Ordinal) && all.TryGetValue("zhs", out var zhs))
+            return zhs;
+        if (all.TryGetValue(DefaultLocale, out var eng))
+            return eng;
+        return new Dictionary<string, string>();
+    }
+
+    internal static string Get(string key)
+    {
+        var all = Tables.Value;
+        string lang = ActiveLanguage;
+
+        if (all.TryGetValue(lang, out var exact) && exact.TryGetValue(key, out var val))
+            return val;
+        if (lang.StartsWith("zh", StringComparison.Ordinal) &&
+            all.TryGetValue("zhs", out var zhs) &&
+            zhs.TryGetValue(key, out val))
+            return val;
+        if (all.TryGetValue(DefaultLocale, out var eng) && eng.TryGetValue(key, out val))
+            return val;
+        return key;
+    }
+
+    private static string Format(string key, params (string Name, object? Value)[] args)
+    {
+        string text = Get(key);
+        foreach (var (name, value) in args)
+            text = text.Replace("{" + name + "}", value?.ToString() ?? "", StringComparison.Ordinal);
+        return text;
+    }
+
+    private static Dictionary<string, Dictionary<string, string>> LoadAllTables()
+    {
+        var result = new Dictionary<string, Dictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
+        var asm = typeof(ModLoc).Assembly;
+
+        foreach (string resName in asm.GetManifestResourceNames())
+        {
+            if (!resName.StartsWith(ResourcePrefix, StringComparison.OrdinalIgnoreCase) ||
+                !resName.EndsWith(ResourceSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            string locale = resName.Substring(
+                ResourcePrefix.Length,
+                resName.Length - ResourcePrefix.Length - ResourceSuffix.Length).ToLowerInvariant();
+
+            using var stream = asm.GetManifestResourceStream(resName);
+            if (stream == null)
+                continue;
+            var dict = JsonSerializer.Deserialize<Dictionary<string, string>>(stream);
+            if (dict != null)
+                result[locale] = dict;
+        }
+
+        // Optional external overrides: <modDir>/localization/<locale>.json
+        try
+        {
+            string? asmDir = Path.GetDirectoryName(asm.Location);
+            if (!string.IsNullOrWhiteSpace(asmDir))
+            {
+                string extDir = Path.Combine(asmDir, "localization");
+                if (Directory.Exists(extDir))
+                {
+                    foreach (string file in Directory.GetFiles(extDir, "*.json"))
+                    {
+                        string locale = Path.GetFileNameWithoutExtension(file).ToLowerInvariant();
+                        var extDict = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(file));
+                        if (extDict == null)
+                            continue;
+                        if (!result.TryGetValue(locale, out var target))
+                        {
+                            result[locale] = extDict;
+                        }
+                        else
+                        {
+                            foreach (var kv in extDict)
+                                target[kv.Key] = kv.Value;
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignore external override I/O errors; embedded tables remain intact.
+        }
+
+        return result;
+    }
 
     // Floating button on Host from Save button
-    internal static string FloatingButtonText => Pick("＋ 中途加入", "+ Mid-Run Join");
-    internal static string FloatingButtonTooltip => Pick(
-        "调整联机成员：添加新玩家（带补给流程）或移除缺席玩家",
-        "Adjust party roster: add mid-run guests (with catch-up rewards) or remove absent players");
+    internal static string FloatingButtonText => Get("floating.button");
+    internal static string FloatingButtonTooltip => Get("floating.tooltip");
 
     // Modal header & buttons
-    internal static string DialogTitle => Pick("调整联机成员", "Adjust Party Roster");
-    internal static string PartyCountBadge(int count) => Pick($"{count} 人", $"{count} Players");
-    internal static string LocalModeBadge => Pick("本地联机", "Local LAN");
-    internal static string DialogOkButton => Pick("建立调整后大厅", "Host Updated Lobby");
-    internal static string DialogCancelButton => Pick("取消", "Cancel");
+    internal static string DialogTitle => Get("dialog.title");
+    internal static string PartyCountBadge(int count) => Format("dialog.party_count_badge", ("count", count));
+    internal static string LocalModeBadge => Get("dialog.local_mode_badge");
+    internal static string DialogOkButton => Get("dialog.ok_button");
+    internal static string DialogCancelButton => Get("dialog.cancel_button");
 
-    internal static string DialogIntro(bool steamReady) => steamReady
-        ? Pick(
-            "可移除缺席的原成员，或从 Steam 好友列表添加新成员并选择职业；建房后将自动发送邀请。",
-            "Remove absent players or pick Steam friends to join with a character; invites are sent automatically.")
-        : Pick(
-            "可移除缺席的原成员，或添加新玩家并选择职业。",
-            "Remove absent players or add new players with a character.");
+    internal static string DialogIntro(bool steamReady) =>
+        Get(steamReady ? "dialog.intro_steam" : "dialog.intro_local");
 
     internal static string RosterSummary(int kept, int removed, int added, int total)
     {
-        if (IsChinese)
-        {
-            string suffix = total > 4 ? "（超过 4 人需配合联机破限 mod）" : "";
-            return $"保留 {kept} 人 · 移除 {removed} 人 · 新增 {added} 人（共 {total} 人）{suffix}";
-        }
-        else
-        {
-            string suffix = total > 4 ? " (5+ players requires a player-limit mod)" : "";
-            return $"Keeping {kept} · Removing {removed} · Adding {added} ({total} total){suffix}";
-        }
+        string suffix = total > 4 ? Get("dialog.roster_summary_limit_suffix") : "";
+        return Format(
+            "dialog.roster_summary",
+            ("kept", kept),
+            ("removed", removed),
+            ("added", added),
+            ("total", total),
+            ("suffix", suffix));
     }
 
     // Section headers
-    internal static string SectionCurrentParty => Pick("当前队伍", "Current Party");
-    internal static string SectionAddGuests => Pick("添加新成员", "Add New Members");
-    internal static string SectionQueuedGuests => Pick("待加入成员", "Queued Members");
-    internal static string SectionCatchUp => Pick("新人补给", "Catch-Up Rewards");
+    internal static string SectionCurrentParty => Get("section.current_party");
+    internal static string SectionAddGuests => Get("section.add_guests");
+    internal static string SectionQueuedGuests => Get("section.queued_guests");
+    internal static string SectionCatchUp => Get("section.catch_up");
 
     // Role badges & row actions
-    internal static string HostBadge => Pick("房主", "Host");
-    internal static string MemberBadge => Pick("原成员", "Member");
-    internal static string RemovingBadge => Pick("将移除", "Removing");
-    internal static string NewGuestBadge => Pick("新增", "New");
-    internal static string RestoredGuestBadge => Pick("恢复进度", "Restore");
-    internal static string SavedProgressBadge => Pick("已存进度", "Saved");
-    internal static string RemoveButton => Pick("移除", "Remove");
-    internal static string ConfirmDeleteButton => Pick("删除", "Delete");
-    internal static string ConfirmStashButton => Pick("保存进度", "Save Progress");
-    internal static string CancelRemoveButton => Pick("取消", "Cancel");
-    internal static string UndoRemoveButton => Pick("撤销移除", "Undo");
-    internal static string RestoredCharacterLockedHint(string name, string charName) => Pick(
-        $"已选择：{name}（已保留进度，锁定为 {charName}）",
-        $"Selected: {name} (saved progress, locked to {charName})");
+    internal static string HostBadge => Get("role.host");
+    internal static string MemberBadge => Get("role.member");
+    internal static string RemovingBadge => Get("role.removing");
+    internal static string NewGuestBadge => Get("role.new_guest");
+    internal static string RestoredGuestBadge => Get("role.restored_guest");
+    internal static string SavedProgressBadge => Get("role.saved_progress");
+    internal static string RemoveButton => Get("action.remove");
+    internal static string ConfirmDeleteButton => Get("action.confirm_delete");
+    internal static string ConfirmStashButton => Get("action.confirm_stash");
+    internal static string CancelRemoveButton => Get("action.cancel_remove");
+    internal static string UndoRemoveButton => Get("action.undo_remove");
+
+    internal static string RestoredCharacterLockedHint(string name, string charName) =>
+        Format("hint.restored_character_locked", ("name", name), ("char", charName));
 
     internal static string UnnamedPlayer(int seatNumber) => seatNumber > 0
-        ? Pick($"玩家 #{seatNumber}", $"Player #{seatNumber}")
-        : Pick("未知玩家", "Unknown Player");
+        ? Format("player.unnamed_seat", ("seat", seatNumber))
+        : Get("player.unknown");
 
     // Friend picker & input controls
-    internal static string FriendSearchPlaceholder => Pick("搜索 Steam 好友...", "Search Steam friends...");
-    internal static string OnlineOnlyCheckbox => Pick("仅看在线", "Online only");
-    internal static string SelectFriendHint => Pick("点击好友选择（双击直接添加）", "Click a friend to select (double-click to add)");
-    internal static string SelectedFriendLabel(string name) => Pick($"已选择：{name}", $"Selected: {name}");
-    internal static string NoFriendsMatch => Pick("没有匹配的 Steam 好友", "No matching Steam friends");
-    internal static string ManualSteamIdPlaceholder => Pick("或直接输入非好友 SteamID...", "Or enter a non-friend SteamID...");
-    internal static string GuestIdPlaceholder => Pick("输入玩家编号（如 3）", "Enter player ID (e.g. 3)");
-    internal static string RandomCharacterOption => Pick("随机", "Random");
-    internal static string AddGuestButton => Pick("＋ 添加", "+ Add");
-    internal static string CatchUpLabel => Pick("补给方式：", "Mode:");
+    internal static string FriendSearchPlaceholder => Get("picker.friend_search_placeholder");
+    internal static string OnlineOnlyCheckbox => Get("picker.online_only");
+    internal static string SelectFriendHint => Get("picker.select_friend_hint");
+    internal static string SelectedFriendLabel(string name) => Format("picker.selected_friend", ("name", name));
+    internal static string NoFriendsMatch => Get("picker.no_friends_match");
+    internal static string ManualSteamIdPlaceholder => Get("picker.manual_steam_id_placeholder");
+    internal static string GuestIdPlaceholder => Get("picker.guest_id_placeholder");
+    internal static string RandomCharacterOption => Get("picker.random_character");
+    internal static string AddGuestButton => Get("action.add_guest");
+    internal static string CatchUpLabel => Get("picker.catch_up_label");
 
     // Steam friend status tags
-    internal static string StatusPlayingSts2 => Pick("正在游玩 STS2", "Playing STS2");
-    internal static string StatusOnline => Pick("在线", "Online");
-    internal static string StatusOffline => Pick("离线", "Offline");
+    internal static string StatusPlayingSts2 => Get("status.playing_sts2");
+    internal static string StatusOnline => Get("status.online");
+    internal static string StatusOffline => Get("status.offline");
 
     // Dialog validation messages
-    internal static string ErrSelectFriendFirst => Pick(
-        "请先从上方列表选择一名 Steam 好友。",
-        "Please select a Steam friend from the list above.");
-    internal static string ErrInvalidPlayerId => Pick(
-        "请输入有效的玩家编号。",
-        "Please enter a valid player number.");
-    internal static string ErrDuplicatePlayer(string displayName) => Pick(
-        $"「{displayName}」已在队伍中或已添加到列表。",
-        $"\"{displayName}\" is already in the party or queued.");
-    internal static string ErrNoChangesSelected => Pick(
-        "请先移除缺席玩家，或至少添加一名新成员。",
-        "Please remove an absent player or add at least one new member.");
-    internal static string ErrGenericPrepareFailed => Pick(
-        "调整成员失败，请查看游戏日志。",
-        "Failed to update party roster. Please check the game log.");
+    internal static string ErrSelectFriendFirst => Get("err.select_friend_first");
+    internal static string ErrInvalidPlayerId => Get("err.invalid_player_id");
+    internal static string ErrDuplicatePlayer(string displayName) => Format("err.duplicate_player", ("name", displayName));
+    internal static string ErrNoChangesSelected => Get("err.no_changes_selected");
+    internal static string ErrGenericPrepareFailed => Get("err.generic_prepare_failed");
 
     // Missing-mod warning popup (shown on Host when a peer connects without MidRunJoin)
-    internal static string MissingModPopupTitle => Pick(
-        "未检测到 MidRunJoin",
-        "MidRunJoin Not Detected");
-    internal static string MissingModPopupBody => Pick(
-        "检测到加入玩家没有安装 mod，因此不会补发奖励：",
-        "Detected joining player(s) without MidRunJoin installed. Catch-up rewards will not be granted:");
-    internal static string MissingModOpenWorkshopButton => Pick(
-        "打开创意工坊",
-        "Open Workshop");
-    internal static string MissingModIgnoreStarterButton => Pick(
-        "忽视并以初始状态进入",
-        "Ignore & Enter with Starter State");
-    internal static string MissingModIgnoreSavedButton => Pick(
-        "忽视并以保存状态进入",
-        "Ignore & Enter with Saved State");
-    internal static string MissingModWorkshopOpenedHint => Pick(
-        "已在 Steam 界面中打开创意工坊页面。",
-        "Opened Workshop page in Steam Overlay.");
-    internal static string MissingModWorkshopUnavailableToast => Pick(
-        "无法跳转，关注XinMoZinc谢谢喵",
-        "Unable to open Steam Workshop — follow XinMoZinc, thanks nya!");
+    internal static string MissingModPopupTitle => Get("missing_mod.title");
+    internal static string MissingModPopupBody => Get("missing_mod.body");
+    internal static string MissingModOpenWorkshopButton => Get("missing_mod.open_workshop");
+    internal static string MissingModIgnoreStarterButton => Get("missing_mod.ignore_starter");
+    internal static string MissingModIgnoreSavedButton => Get("missing_mod.ignore_saved");
+    internal static string MissingModWorkshopOpenedHint => Get("missing_mod.workshop_opened_hint");
+    internal static string MissingModWorkshopUnavailableToast => Get("missing_mod.workshop_unavailable_toast");
 
     // Candidate validation errors
-    internal static string ErrExitRunFirst => Pick(
-        "请先退出当前冒险后再调整联机成员。",
-        "Please exit the current run before adjusting the party roster.");
-    internal static string ErrDailyNotSupported => Pick(
-        "每日挑战存档不支持中途调整成员。",
-        "Mid-run roster changes are not supported in Daily Runs.");
-    internal static string ErrEmptySave => Pick(
-        "存档中没有任何玩家。",
-        "The save file contains no players.");
-    internal static string ErrNoRosterDelta => Pick(
-        "请至少添加一名新玩家或移除一名缺席玩家。",
-        "Please add at least one new player or remove an absent player.");
-    internal static string ErrCannotRemoveHost => Pick(
-        "不能移除房主（1 号位玩家）。",
-        "Cannot remove the host (seat 1).");
-    internal static string ErrPlayerNotInSave(ulong id) => Pick(
-        "存档中不存在该玩家，无法移除。",
-        "That player does not exist in this save and cannot be removed.");
-    internal static string ErrNeedOneRemaining => Pick(
-        "至少需要保留一名玩家。",
-        "At least one player must remain in the party.");
-    internal static string ErrZeroPlayerId => Pick(
-        "玩家信息无效。",
-        "Invalid player selection.");
-    internal static string ErrGuestAlreadyInParty(ulong id) => Pick(
-        "该玩家已在队伍中或被重复添加。",
-        "That player is already in the party or added twice.");
+    internal static string ErrExitRunFirst => Get("err.exit_run_first");
+    internal static string ErrDailyNotSupported => Get("err.daily_not_supported");
+    internal static string ErrEmptySave => Get("err.empty_save");
+    internal static string ErrNoRosterDelta => Get("err.no_roster_delta");
+    internal static string ErrCannotRemoveHost => Get("err.cannot_remove_host");
+    internal static string ErrPlayerNotInSave(ulong id) => Get("err.player_not_in_save");
+    internal static string ErrNeedOneRemaining => Get("err.need_one_remaining");
+    internal static string ErrZeroPlayerId => Get("err.zero_player_id");
+    internal static string ErrGuestAlreadyInParty(ulong id) => Get("err.guest_already_in_party");
 
     // Catch-up flow names & descriptions
-    internal static string FlowHistoryBellName => Pick(
-        "按经过的房间补给奖励",
-        "Catch-Up Rewards (By Visited Rooms)");
-    internal static string FlowHistoryBellDesc => Pick(
-        "根据队伍已历经的房间发放对应奖励：战斗提供卡牌/金币/遗物、问号与商店各折算10金、宝箱提供金币与随机遗物、每2个火堆提供1次强化、每名先古之民提供1次对应遗物三选一、每名Boss提供1次删牌。",
-        "Grants rewards based on rooms the party has visited: Enemy/Elite/Boss combat drops (Cards/Gold/Relics/Potions), +10 Gold per Unknown (???) or Merchant, Treasure Gold + Relic, 1 Card Upgrade per 2 Rest Sites, 1 choose-1-of-3 Ancient Relic per visited Ancient, and 1 Card Removal per Boss.");
-    internal static string FlowNoneName => Pick(
-        "无补给（仅初始牌组与遗物）",
-        "No Catch-Up (Starter Deck & Relic Only)");
-    internal static string FlowNoneDesc => Pick(
-        "不发放额外补给，新人直接以职业初始配置加入。",
-        "No extra rewards; new players join with their character's starter deck and starter relic.");
+    internal static string FlowHistoryBellName => Get("flow.history_bell.name");
+    internal static string FlowHistoryBellDesc => Get("flow.history_bell.desc");
+    internal static string FlowNoneName => Get("flow.none.name");
+    internal static string FlowNoneDesc => Get("flow.none.desc");
 }

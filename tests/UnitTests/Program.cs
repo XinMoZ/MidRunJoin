@@ -237,6 +237,32 @@ void Check(bool condition, string name)
     Console.WriteLine($"PASS: SteamHelper.TryOpenWorkshopPage ({checks} checks)");
 }
 
+// 5c. Localization JSON parity & fallback check
+{
+    var eng = ModLoc.GetTable("eng");
+    var zhs = ModLoc.GetTable("zhs");
+    Check(eng.Count > 40, $"eng.json expected >40 keys, got {eng.Count}");
+    Check(eng.Count == zhs.Count, $"eng.json ({eng.Count}) and zhs.json ({zhs.Count}) key count mismatch");
+    foreach (var kv in eng)
+    {
+        Check(!string.IsNullOrWhiteSpace(kv.Value), $"eng.json empty value for {kv.Key}");
+        Check(zhs.TryGetValue(kv.Key, out var zhVal) && !string.IsNullOrWhiteSpace(zhVal),
+            $"zhs.json missing or empty value for {kv.Key}");
+    }
+    ModLoc.LanguageOverride = "eng";
+    Check(ModLoc.MissingModWorkshopUnavailableToast.Contains("Plz check XinMoZinc's workshop"),
+        $"Unexpected English toast: {ModLoc.MissingModWorkshopUnavailableToast}");
+    ModLoc.LanguageOverride = "zhs";
+    Check(ModLoc.MissingModWorkshopUnavailableToast == "无法跳转，关注XinMoZinc谢谢喵",
+        $"Unexpected Chinese toast: {ModLoc.MissingModWorkshopUnavailableToast}");
+    ModLoc.LanguageOverride = "zht";
+    Check(ModLoc.DialogTitle == zhs["dialog.title"], "zht must fall back to zhs");
+    ModLoc.LanguageOverride = "fra";
+    Check(ModLoc.DialogTitle == eng["dialog.title"], "unknown locale must fall back to eng");
+    ModLoc.LanguageOverride = null;
+    Console.WriteLine($"PASS: Localization JSON parity & fallback ({checks} checks)");
+}
+
 // 6. Manifest & Release packaging hygiene check
 {
     string projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));

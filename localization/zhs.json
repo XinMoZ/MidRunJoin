@@ -32,7 +32,6 @@
   "action.add_guest": "＋ 添加",
 
   "hint.restored_character_locked": "已选择：{name}（已保留进度，锁定为 {char}）",
-  "hint.combat_start_catch_up_disabled": "当前存档处于战斗开始时，为避免联机不同步已禁用补给（请打完本场战斗后再带补给加入，或以无补给加入）。",
   "player.unnamed_seat": "玩家 #{seat}",
   "player.unknown": "未知玩家",
 

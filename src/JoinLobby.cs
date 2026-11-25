@@ -1056,10 +1056,7 @@ internal static class JoinLobby
         };
         foreach (var f in flows)
             flowPicker.AddItem(f.DisplayName);
-        bool isCombatStart = Candidate.IsCombatStartSave(run);
-        int noneFlowIndex = flows.ToList().FindIndex(f => f.Id.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase));
-        flowPicker.Selected = isCombatStart && noneFlowIndex >= 0 ? noneFlowIndex : 0;
-        flowPicker.Disabled = isCombatStart;
+        flowPicker.Selected = 0;
         VanillaUi.StyleOptionButton(flowPicker, 14);
         flowRow.AddChild(flowPicker);
         flowSection.AddChild(flowRow);
@@ -1067,11 +1064,11 @@ internal static class JoinLobby
         var flowDesc = new Label
         {
             Name = "CatchUpFlowDesc",
-            Text = isCombatStart ? ModLoc.CombatStartCatchUpDisabledHint : flows[0].Description,
+            Text = flows[0].Description,
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             SizeFlagsHorizontal = Control.SizeFlags.ExpandFill
         };
-        VanillaUi.ApplyFont(flowDesc, FontType.Regular, 13, isCombatStart ? StsColors.gold : VanillaUi.MutedText);
+        VanillaUi.ApplyFont(flowDesc, FontType.Regular, 13, VanillaUi.MutedText);
         flowPicker.ItemSelected += idx =>
         {
             if (idx >= 0 && idx < flows.Count)

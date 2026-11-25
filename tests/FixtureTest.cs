@@ -814,16 +814,22 @@ public static class FixtureTest
             "Clicking IgnoreMissingModButton must close the warning modal");
         langOverrideProp.SetValue(null, null);
 
-        // 5b. Combat-start save GUI guard: CatchUpFlowPicker must be locked to NoneCatchUpFlow & disabled
+        // 5b. Combat-start save guard on ConfirmButton click: flowPicker stays selectable, clicking ConfirmButton
+        //     with a catch-up flow blocks lobby creation and displays the error message in StatusLabel.
         var combatStartSave = CloneRun(checkpoint);
         combatStartSave.PreFinishedRoom = null;
         var combatStartDialog = ShiftLoad(menu!, combatStartSave);
         var combatFlowPicker = combatStartDialog.FindChild("CatchUpFlowPicker", true, false) as OptionButton;
-        Require(combatFlowPicker != null && combatFlowPicker.Disabled,
-            "CatchUpFlowPicker must be disabled when save is at combat start");
-        int noneIdx = CatchUpRegistry.GetIndexById(NoneCatchUpFlow.FlowId);
-        Require(combatFlowPicker!.Selected == noneIdx,
-            $"CatchUpFlowPicker must select NoneCatchUpFlow (idx={noneIdx}) on combat-start save, got {combatFlowPicker.Selected}");
+        Require(combatFlowPicker != null && !combatFlowPicker.Disabled,
+            "CatchUpFlowPicker should stay selectable on combat-start save (blocking happens on Confirm)");
+        var combatInput = combatStartDialog.FindChild("GuestIdInput", true, false) as LineEdit;
+        combatInput!.Text = "3";
+        (combatStartDialog.FindChild("ConfirmButton", true, false) as Button)!.EmitSignal(BaseButton.SignalName.Pressed);
+        Require(menu!.GetNodeOrNull<Control>("MidRunJoinRosterModal") != null,
+            "Combat-start save with catch-up must block lobby creation and keep modal open");
+        var combatStatus = combatStartDialog.FindChild("StatusLabel", true, false) as Label;
+        Require(combatStatus != null && (combatStatus.Text.Contains("战斗开始", StringComparison.Ordinal) || combatStatus.Text.Contains("start of combat", StringComparison.OrdinalIgnoreCase)),
+            $"Expected combat-start blocked message in StatusLabel, got: {combatStatus?.Text}");
         (combatStartDialog.FindChild("CancelButton", true, false) as Button)?.EmitSignal(BaseButton.SignalName.Pressed);
 
         // 6. In-game performance / anti-stutter regression budgets (modal open, 30-floor late-game catch-up, SafeGetEntry)

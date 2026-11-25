@@ -178,7 +178,6 @@ internal static class ModLoc
 
     internal static string RestoredCharacterLockedHint(string name, string charName) =>
         Format("hint.restored_character_locked", ("name", name), ("char", charName));
-    internal static string CombatStartCatchUpDisabledHint => Get("hint.combat_start_catch_up_disabled");
 
     internal static string UnnamedPlayer(int seatNumber) => seatNumber > 0
         ? Format("player.unnamed_seat", ("seat", seatNumber))

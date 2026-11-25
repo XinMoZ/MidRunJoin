@@ -32,7 +32,6 @@
   "action.add_guest": "+ Add",
 
   "hint.restored_character_locked": "Selected: {name} (saved progress, locked to {char})",
-  "hint.combat_start_catch_up_disabled": "Save is at the start of combat — catch-up rewards are disabled to prevent multiplayer desync (finish this combat first, or join with No Catch-Up).",
   "player.unnamed_seat": "Player #{seat}",
   "player.unknown": "Unknown Player",
 

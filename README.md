@@ -87,7 +87,7 @@ Subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedet
 
 ## Compatibility
 
-- **Game Branches**: Tested on both **mainline (`public`, v0.111.1)** and **`public-beta` (v0.113.1)** using a single cross-version DLL ([src/Compat.cs](src/Compat.cs)).
+- **Game Branches**: Tested on both **mainline (`public`, v0.111.1)** and **`public-beta` (v0.114.0)** using a single cross-version DLL ([src/Compat.cs](src/Compat.cs)).
 - **Other Mods**: Compatible with Custom Run modifiers, split-path mods (catch-up follows the host's route), and player-limit-break mods.
 
 ---

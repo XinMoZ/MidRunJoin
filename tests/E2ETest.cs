@@ -445,7 +445,11 @@ internal static class E2ETest
                 return;
             }
             _rng ??= new Random((int)(me.NetId * 7919 + 42));
-            var playable = me.PlayerCombatState!.Hand.Cards.Where(c => c.CanPlay(out _, out _)).ToList();
+            // Skip cards that open interactive hand-selection prompts (e.g. Silent's Survivor discard)
+            // because this headless bot does not drive card-selection sub-screens during Turn 1 combat.
+            var playable = me.PlayerCombatState!.Hand.Cards
+                .Where(c => c.CanPlay(out _, out _) && !string.Equals(c.Id.Entry, "SURVIVOR", StringComparison.OrdinalIgnoreCase))
+                .ToList();
             if (playable.Count > 0 && _turn1CardsPlayed < 3)
             {
                 var card = playable[_rng.Next(playable.Count)];

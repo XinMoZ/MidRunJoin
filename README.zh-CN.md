@@ -87,7 +87,7 @@
 
 ## 兼容性
 
-- **游戏分支**：单份 DLL 已在**正式版（`public`, v0.111.1）**与 **`public-beta`（v0.113.1）** 实测通过（[src/Compat.cs](src/Compat.cs)）。
+- **游戏分支**：单份 DLL 已在**正式版（`public`, v0.111.1）**与 **`public-beta`（v0.114.0）** 实测通过（[src/Compat.cs](src/Compat.cs)）。
 - **其他 Mod**：兼容自定义模式修饰符、分路类 Mod（按房主路线统计补给）以及多人破限 Mod。
 
 ---

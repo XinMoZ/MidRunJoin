@@ -5,6 +5,7 @@ using System.Text.Json;
 using MegaCrit.Sts2.Core.Entities.Ascension;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Helpers;
+using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Random;
@@ -24,6 +25,44 @@ public readonly record struct GuestSpec(
 
 internal static class Candidate
 {
+    /// <summary>
+    /// Returns <c>true</c> when loading <paramref name="run"/> enters directly into the start of a combat
+    /// (<see cref="SerializableRun.PreFinishedRoom"/> is <c>null</c> and the latest visited map point is
+    /// a Monster, Elite, or Boss encounter). Offering catch-up rewards during an active combat mutates
+    /// combat decks/relics mid-fight and causes multiplayer desync, so catch-up is blocked in this state.
+    /// </summary>
+    internal static bool IsCombatStartSave(SerializableRun run)
+    {
+        if (run.PreFinishedRoom != null)
+            return false;
+        if (run.VisitedMapCoords == null || run.VisitedMapCoords.Count == 0)
+            return false;
+
+        var latestCoord = run.VisitedMapCoords[^1];
+        if (run.CurrentActIndex >= 0 && run.CurrentActIndex < run.Acts.Count)
+        {
+            var savedMap = run.Acts[run.CurrentActIndex].SavedMap;
+            if (savedMap != null)
+            {
+                if (savedMap.BossPoint != null && savedMap.BossPoint.Coord.Equals(latestCoord))
+                    return true;
+                if (savedMap.SecondBossPoint != null && savedMap.SecondBossPoint.Coord.Equals(latestCoord))
+                    return true;
+                if (savedMap.StartingPoint != null && savedMap.StartingPoint.Coord.Equals(latestCoord))
+                    return IsCombatPointType(savedMap.StartingPoint.PointType);
+                var point = savedMap.Points?.FirstOrDefault(p => p.Coord.Equals(latestCoord));
+                if (point != null)
+                    return IsCombatPointType(point.PointType);
+            }
+        }
+
+        var latestEntry = run.MapPointHistory?.LastOrDefault(act => act.Count > 0)?.LastOrDefault();
+        return latestEntry != null && IsCombatPointType(latestEntry.MapPointType);
+    }
+
+    private static bool IsCombatPointType(MapPointType pt) =>
+        pt is MapPointType.Monster or MapPointType.Elite or MapPointType.Boss;
+
     internal static SerializableRun Prepare(SerializableRun checkpoint, ulong guestId) =>
         Prepare(checkpoint, [new GuestSpec(guestId, ModelDb.Character<Ironclad>())], null, null);
 
@@ -71,6 +110,12 @@ internal static class Candidate
             if (!remainingIds.Add(guest.GuestId))
                 throw new InvalidOperationException(ModLoc.ErrGuestAlreadyInParty(guest.GuestId));
         }
+
+        bool isCombatStart = IsCombatStartSave(checkpoint);
+        bool hasCatchUpFlow = !string.IsNullOrWhiteSpace(catchUpFlowId) &&
+            !catchUpFlowId.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase);
+        if (addList.Count > 0 && hasCatchUpFlow && isCombatStart)
+            throw new InvalidOperationException(ModLoc.ErrCombatStartCatchUpBlocked);
 
         var type = JsonSerializationUtility.GetTypeInfo<SerializableRun>();
         var candidate = JsonSerializer.Deserialize(JsonSerializer.SerializeToUtf8Bytes(checkpoint, type), type)!;
@@ -121,9 +166,7 @@ internal static class Candidate
                     serializedGuest = guest.ToSerializable();
                 }
 
-                bool hasCatchUpFlow = !string.IsNullOrWhiteSpace(catchUpFlowId) &&
-                    !catchUpFlowId.Equals(NoneCatchUpFlow.FlowId, StringComparison.OrdinalIgnoreCase);
-                if ((hasCatchUpFlow || (!isRestored && candidate.Modifiers.Count > 0)) && serializedGuest.Relics.Count > 0)
+                if (!isCombatStart && (hasCatchUpFlow || (!isRestored && candidate.Modifiers.Count > 0)) && serializedGuest.Relics.Count > 0)
                 {
                     string markerFlow = hasCatchUpFlow ? catchUpFlowId! : NoneCatchUpFlow.FlowId;
                     serializedGuest.Relics[0].FloorAddedToDeck = CatchUpCoordinator.EncodeFlowMarker(markerFlow, isRestored);

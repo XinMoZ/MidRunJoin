@@ -178,6 +178,7 @@ internal static class ModLoc
 
     internal static string RestoredCharacterLockedHint(string name, string charName) =>
         Format("hint.restored_character_locked", ("name", name), ("char", charName));
+    internal static string CombatStartCatchUpDisabledHint => Get("hint.combat_start_catch_up_disabled");
 
     internal static string UnnamedPlayer(int seatNumber) => seatNumber > 0
         ? Format("player.unnamed_seat", ("seat", seatNumber))
@@ -219,6 +220,7 @@ internal static class ModLoc
     // Candidate validation errors
     internal static string ErrExitRunFirst => Get("err.exit_run_first");
     internal static string ErrDailyNotSupported => Get("err.daily_not_supported");
+    internal static string ErrCombatStartCatchUpBlocked => Get("err.combat_start_catch_up_blocked");
     internal static string ErrEmptySave => Get("err.empty_save");
     internal static string ErrNoRosterDelta => Get("err.no_roster_delta");
     internal static string ErrCannotRemoveHost => Get("err.cannot_remove_host");

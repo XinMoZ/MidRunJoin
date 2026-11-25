@@ -57,6 +57,7 @@ internal static class E2ETest
     private static bool _turn2KillSent;
     private static bool _phase2CombatEntered;
     private static bool _phase2RewardsProceedSent;
+    private static bool _phase2PreFinishedProceedSent;
     private static int _phase2InitialVisitedCount = -1;
     private static Random? _rng;
 
@@ -294,23 +295,21 @@ internal static class E2ETest
                 return;
             }
 
-            if (NMapScreen.Instance?.IsOpen == true || _phase1RewardsProceedSent)
-                VoteForNextNode(state, me, visited, preferMonster: true, requireMonsterChild: false);
-            return;
-        }
-
-        if (monsterCount >= 2 && CombatManager.Instance.IsInProgress && IsLocalPlayPhase(me))
-        {
-            if (me.NetId == 1)
+            if (_phase1RewardsProceedSent && NMapScreen.Instance?.IsOpen == true)
             {
-                var saved = SaveManager.Instance.LoadAndCanonicalizeMultiplayerRunSave(1);
-                Require(saved.SaveData != null, "Host mid-combat save missing");
-                Require(saved.SaveData!.Players.Count == 2, $"Expected 2 players in Phase1 save, got {saved.SaveData.Players.Count}");
-                Require(saved.SaveData.PreFinishedRoom == null, "Expected PreFinishedRoom == null for mid-combat save");
-                Log.Info($"[MidRunJoinE2E] Phase1 host verified MID-COMBAT save: players=2 visited={saved.SaveData.VisitedMapCoords.Count}");
+                if (me.NetId == 1)
+                {
+                    var saved = SaveManager.Instance.LoadAndCanonicalizeMultiplayerRunSave(1);
+                    Require(saved.SaveData != null, "Host post-combat map checkpoint save missing");
+                    Require(saved.SaveData!.Players.Count == 2, $"Expected 2 players in Phase1 save, got {saved.SaveData.Players.Count}");
+                    Require(saved.SaveData.PreFinishedRoom != null, "Expected PreFinishedRoom != null for post-combat map checkpoint");
+                    Log.Info($"[MidRunJoinE2E] Phase1 host verified post-combat MAP checkpoint: players=2 visited={saved.SaveData.VisitedMapCoords.Count}");
+                }
+                Log.Info($"[MidRunJoinE2E] PHASE1_PASS peer={me.NetId}");
+                _done = true;
+                return;
             }
-            Log.Info($"[MidRunJoinE2E] PHASE1_PASS peer={me.NetId}");
-            _done = true;
+            return;
         }
     }
 
@@ -366,7 +365,7 @@ internal static class E2ETest
             {
                 _guestBellRewardsHandled = true;
                 var rewardsSet = (RewardsSet)AccessTools.Field(typeof(NRewardsScreen), "_rewardsSet").GetValue(bellRewards)!;
-                Require(rewardsSet.Rewards.Count >= 3, $"Expected >= 3 CallingBell catch-up rewards, got {rewardsSet.Rewards.Count}");
+                Require(rewardsSet.Rewards.Count >= 2, $"Expected >= 2 CallingBell catch-up rewards, got {rewardsSet.Rewards.Count}");
                 _ = TaskHelper.RunSafely(ClaimGoldAndDismissBellRewardsAsync(node, bellRewards, rewardsSet, me));
                 _cooldown = 0.8;
                 return;
@@ -407,27 +406,46 @@ internal static class E2ETest
             return;
         }
 
-        // Step C / D: Map voting before or after 2nd monster
+        // Step C / D: Proceed from pre-finished rewards screen / map voting before or after 2nd monster
         if (!cm.IsInProgress || cs == null)
         {
-            if (_phase2CombatEntered && !_phase2RewardsProceedSent && NOverlayStack.Instance?.Peek() is NRewardsScreen)
+            if (NOverlayStack.Instance?.Peek() is NRewardsScreen)
             {
-                _phase2RewardsProceedSent = true;
-                Log.Info($"[MidRunJoinE2E] REWARDS_OK peer={me.NetId} proceeding from 4P combat rewards");
-                SaveManager.Instance.MarkFtueAsComplete("combat_reward_ftue");
-                RunManager.Instance.ProceedFromTerminalRewardsScreen();
-                _cooldown = 0.8;
-                return;
+                if (_phase2CombatEntered && !_phase2RewardsProceedSent)
+                {
+                    _phase2RewardsProceedSent = true;
+                    Log.Info($"[MidRunJoinE2E] REWARDS_OK peer={me.NetId} proceeding from 4P combat rewards");
+                    SaveManager.Instance.MarkFtueAsComplete("combat_reward_ftue");
+                    RunManager.Instance.ProceedFromTerminalRewardsScreen();
+                    _cooldown = 0.8;
+                    return;
+                }
+                if (!_phase2CombatEntered && !_phase2PreFinishedProceedSent)
+                {
+                    if (me.NetId > 2 && !_guestBellRewardsHandled)
+                        return;
+                    _phase2PreFinishedProceedSent = true;
+                    SaveManager.Instance.MarkFtueAsComplete("combat_reward_ftue");
+                    RunManager.Instance.ProceedFromTerminalRewardsScreen();
+                    _cooldown = 0.8;
+                    return;
+                }
             }
-            if (NMapScreen.Instance?.IsOpen == true || _phase2RewardsProceedSent)
+            if (NMapScreen.Instance?.IsOpen == true || (_phase2CombatEntered ? _phase2RewardsProceedSent : _phase2PreFinishedProceedSent))
             {
+                if (!_phase2CombatEntered && _mapVoteSentForVisitedCount.Count > 0)
+                    return;
                 VoteForNextNode(state, me, state.VisitedMapCoords.Count, preferMonster: true, requireMonsterChild: false);
             }
             return;
         }
 
         // Inside 4P Monster combat!
-        _phase2CombatEntered = true;
+        if (!_phase2CombatEntered)
+        {
+            _phase2CombatEntered = true;
+            _phase2InitialVisitedCount = state.VisitedMapCoords.Count;
+        }
         if (!IsLocalPlayPhase(me))
             return;
 

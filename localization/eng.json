@@ -32,6 +32,7 @@
   "action.add_guest": "+ Add",
 
   "hint.restored_character_locked": "Selected: {name} (saved progress, locked to {char})",
+  "hint.combat_start_catch_up_disabled": "Save is at the start of combat — catch-up rewards are disabled to prevent multiplayer desync (finish this combat first, or join with No Catch-Up).",
   "player.unnamed_seat": "Player #{seat}",
   "player.unknown": "Unknown Player",
 
@@ -65,6 +66,7 @@
 
   "err.exit_run_first": "Please exit the current run before adjusting the party roster.",
   "err.daily_not_supported": "Mid-run roster changes are not supported in Daily Runs.",
+  "err.combat_start_catch_up_blocked": "Catch-up rewards are blocked when loading at the start of combat to prevent multiplayer desync. Finish this combat first, or choose No Catch-Up.",
   "err.empty_save": "The save file contains no players.",
   "err.no_roster_delta": "Please add at least one new player or remove an absent player.",
   "err.cannot_remove_host": "Cannot remove the host (seat 1).",

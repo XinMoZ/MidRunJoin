@@ -94,6 +94,8 @@ Subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedet
 
 ## FAQ & Known Limitations
 
+- **Why are catch-up rewards disabled when the save is at the start of combat?**  
+  Granting catch-up cards/relics/upgrades during an active combat mutates combat state mid-fight and triggers multiplayer `StateDivergence` desyncs. Finish the current combat first (so the save is at a post-combat map checkpoint) to join with catch-up rewards, or join with **No Catch-Up**.
 - **Why does the missing-mod warning appear on the host's screen instead of the unmodded guest's?**  
   An unmodded client runs 100% vanilla code; STS2's native protocol only supports fixed disconnect error codes and cannot push custom UI modals to unmodded clients.
 - **Why are Card Upgrades and Custom Run start modifiers skipped in Safe-Sync mode?**  

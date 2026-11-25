@@ -180,18 +180,21 @@ public static class FixtureTest
         ExpectInvalidOp(() => InvokePrepare(validMapCp, new GuestSpec(3, ironclad), new GuestSpec(3, ironclad)), "Duplicate within guests");
         ExpectInvalidOp(() => InvokePrepare(validMapCp, new GuestSpec(0, ironclad)), "GuestId == 0");
 
-        // 8. ALL SAVE STATES ACCEPTED: mid-combat (PreFinishedRoom == null && VisitedMapCoords > 0), act-start map, and PreFinishedRoom != null
+        // 8. Save states: combat-start (PreFinishedRoom == null on Monster/Elite/Boss) allows No Catch-Up
+        //    but MUST block catch-up rewards to prevent mid-combat multiplayer desync; act-start & pre-finished allow catch-up.
         var midCombat = CloneRun(validMapCp);
         midCombat.PreFinishedRoom = null;
         Require(midCombat.VisitedMapCoords.Count > 0, "midCombat should have visited coords");
         var midCombatCand = InvokePrepare(midCombat, new GuestSpec(3, ironclad));
-        Require(midCombatCand.Players.Count == 3, "Mid-combat save should now be accepted");
+        Require(midCombatCand.Players.Count == 3, "Mid-combat save with No Catch-Up should be accepted");
+        ExpectInvalidOp(() => InvokePrepare(midCombat, [new GuestSpec(3, ironclad)], null, HistoryBellCatchUpFlow.FlowId),
+            "Combat-start save with catch-up rewards must be blocked");
 
         var actStart = CloneRun(validMapCp);
         actStart.PreFinishedRoom = null;
         actStart.VisitedMapCoords.Clear();
-        var actStartCand = InvokePrepare(actStart, new GuestSpec(3, ironclad));
-        Require(actStartCand.Players.Count == 3, "Act-start map save should be accepted");
+        var actStartCand = InvokePrepare(actStart, [new GuestSpec(3, ironclad)], null, HistoryBellCatchUpFlow.FlowId);
+        Require(actStartCand.Players.Count == 3, "Act-start map save with catch-up should be accepted");
 
         Log.Info($"[MidRunJoinSmoke] PASS: RejectionAndAllSaveStatesMatrix ({checkCount} checks)");
     }
@@ -810,6 +813,18 @@ public static class FixtureTest
         Require(menu!.GetNodeOrNull<Control>("MidRunJoinMissingModModal") == null,
             "Clicking IgnoreMissingModButton must close the warning modal");
         langOverrideProp.SetValue(null, null);
+
+        // 5b. Combat-start save GUI guard: CatchUpFlowPicker must be locked to NoneCatchUpFlow & disabled
+        var combatStartSave = CloneRun(checkpoint);
+        combatStartSave.PreFinishedRoom = null;
+        var combatStartDialog = ShiftLoad(menu!, combatStartSave);
+        var combatFlowPicker = combatStartDialog.FindChild("CatchUpFlowPicker", true, false) as OptionButton;
+        Require(combatFlowPicker != null && combatFlowPicker.Disabled,
+            "CatchUpFlowPicker must be disabled when save is at combat start");
+        int noneIdx = CatchUpRegistry.GetIndexById(NoneCatchUpFlow.FlowId);
+        Require(combatFlowPicker!.Selected == noneIdx,
+            $"CatchUpFlowPicker must select NoneCatchUpFlow (idx={noneIdx}) on combat-start save, got {combatFlowPicker.Selected}");
+        (combatStartDialog.FindChild("CancelButton", true, false) as Button)?.EmitSignal(BaseButton.SignalName.Pressed);
 
         // 6. In-game performance / anti-stutter regression budgets (modal open, 30-floor late-game catch-up, SafeGetEntry)
         {

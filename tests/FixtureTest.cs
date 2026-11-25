@@ -723,10 +723,21 @@ public static class FixtureTest
         CatchUpCoordinator.DecodeMarker(mSafeRestored, out int decIdx, out bool decRestored, out bool decSafe);
         Require(decIdx == 0 && decRestored && decSafe, "DecodeMarker failed for SafeSyncRestored");
 
-        // Verify Candidate.Prepare backfills earlier floors for unmodded peer safety
         var candidateType = typeof(MidRunJoin.Entry).Assembly.GetType("MidRunJoin.Candidate")!;
         var prepare4 = AccessTools.Method(candidateType, "Prepare",
             [typeof(SerializableRun), typeof(IReadOnlyList<GuestSpec>), typeof(IReadOnlyCollection<ulong>), typeof(string)])!;
+
+        // Verify Candidate.Prepare inherits party UnlockState (fixes Kaleidoscope 1-of-1 card reward bug when UnlockState.none was used)
+        var unlockCp = CreateMapCheckpoint([1, 2], 0);
+        unlockCp.Players[0].UnlockState = UnlockState.all.ToSerializable();
+        var unlockCand = (SerializableRun)prepare4.Invoke(null, [unlockCp, (IReadOnlyList<GuestSpec>)[new GuestSpec(3, ModelDb.Character<Ironclad>())], null, HistoryBellCatchUpFlow.FlowId])!;
+        var unlockState = RunState.FromSerializable(unlockCand);
+        var unlockGuest = unlockState.Players.First(p => p.NetId == 3);
+        int otherCharPools = unlockGuest.UnlockState.CharacterCardPools.Count(p => p != unlockGuest.Character.CardPool);
+        Require(otherCharPools >= 3,
+            $"Guest must inherit party UnlockState so relics like Kaleidoscope offer 3 choices (got {otherCharPools} other character pools)");
+
+        // Verify Candidate.Prepare backfills earlier floors for unmodded peer safety
         var cp2ForBackfill = CreateMapCheckpoint([1, 2], 0);
         var backfillCheck = (SerializableRun)prepare4.Invoke(null, [cp2ForBackfill, (IReadOnlyList<GuestSpec>)[new GuestSpec(3, ModelDb.Character<Ironclad>())], null, HistoryBellCatchUpFlow.FlowId])!;
         foreach (var actEntries in backfillCheck.MapPointHistory)

@@ -110,7 +110,9 @@ internal static class Candidate
                 }
                 else
                 {
-                    var guest = Player.CreateForNewRun(spec.Character, UnlockState.none, spec.GuestId);
+                    var guestUnlockState = state.UnlockState
+                        ?? (state.Players.Count > 0 ? state.Players[0].UnlockState : UnlockState.all);
+                    var guest = Player.CreateForNewRun(spec.Character, guestUnlockState, spec.GuestId);
                     state.AddPlayerDebug(guest, -1);
                     ascension.ApplyEffectsTo(guest);
                     int syncedHp = CatchUpHealthFormula.ComputeSyncedCurrentHp(existingHpSnapshot, guest.Creature.MaxHp);

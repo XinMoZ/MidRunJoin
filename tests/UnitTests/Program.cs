@@ -159,7 +159,7 @@ void Check(bool condition, string name)
     Console.WriteLine($"PASS: SteamHelper.TryInviteGuest ({checks} checks)");
 }
 
-// 4. Performance micro-benchmark for friend ranking
+// 4. Performance micro-benchmarks (anti-stutter budgets for UI hot paths)
 {
     var largeList = Enumerable.Range(1, 200)
         .Select(i => new RawFriendInfo((ulong)(76561198000000000 + i), $"Friend_{i:D3}", i % 10 == 0, i % 3 != 0))
@@ -172,7 +172,27 @@ void Check(bool condition, string name)
     sw.Stop();
     double usPerOp = sw.Elapsed.TotalMicroseconds / iters;
     Check(usPerOp < 5000, $"RankAndFormatFriends(200) unexpectedly slow: {usPerOp:F1} us/op");
-    Console.WriteLine($"PERF: RankAndFormatFriends(200 friends): {usPerOp:F1} us/op");
+
+    // Keystroke filter benchmark (runs on every search box edit)
+    var ranked200 = SteamHelper.RankAndFormatFriends(largeList, excluded);
+    var stashedSet = new HashSet<ulong> { 76561198000000005, 76561198000000150 };
+    for (int i = 0; i < 64; i++) SteamHelper.FilterFriends(ranked200, "Friend_1", onlineOnly: true, stashedSet);
+    sw.Restart();
+    for (int i = 0; i < iters; i++) SteamHelper.FilterFriends(ranked200, "Friend_1", onlineOnly: true, stashedSet);
+    sw.Stop();
+    double filterUs = sw.Elapsed.TotalMicroseconds / iters;
+    Check(filterUs < 2000, $"FilterFriends(200) unexpectedly slow: {filterUs:F1} us/op");
+
+    // Localization lookup benchmark (runs on every UI rebuild)
+    for (int i = 0; i < 100; i++) _ = ModLoc.RosterSummary(2, 1, 2, 3);
+    sw.Restart();
+    const int locIters = 10000;
+    for (int i = 0; i < locIters; i++) _ = ModLoc.RosterSummary(2, 1, 2, 3);
+    sw.Stop();
+    double locUs = sw.Elapsed.TotalMicroseconds / locIters;
+    Check(locUs < 50, $"ModLoc.RosterSummary unexpectedly slow: {locUs:F2} us/op");
+
+    Console.WriteLine($"PERF: Rank200={usPerOp:F1} us/op, Filter200={filterUs:F1} us/op, ModLoc={locUs:F2} us/op");
 }
 
 // 5. HistoryBellFormula pure reward calculation tests

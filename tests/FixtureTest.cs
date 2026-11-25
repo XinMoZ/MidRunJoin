@@ -513,7 +513,9 @@ public static class FixtureTest
         var sw = Stopwatch.StartNew();
         for (int i = 0; i < 5; i++) InvokePrepare(checkpoint, new GuestSpec(3, ironclad), new GuestSpec(4, silent));
         sw.Stop();
-        Log.Info($"[MidRunJoinSmoke] PASS: ZeroImpact + 4P Determinism + PacketRoundtrip (Prepare2 avg={sw.Elapsed.TotalMilliseconds / 5.0:F1} ms, {checkCount} checks)");
+        double prepareAvgMs = sw.Elapsed.TotalMilliseconds / 5.0;
+        Require(prepareAvgMs < 150.0, $"Candidate.Prepare(2 guests) too slow: {prepareAvgMs:F1} ms (budget < 150 ms)");
+        Log.Info($"[MidRunJoinSmoke] PASS: ZeroImpact + 4P Determinism + PacketRoundtrip (Prepare2 avg={prepareAvgMs:F1} ms, {checkCount} checks)");
     }
 
     private static void CheckMultiGuestDialogAndSelection(NMultiplayerSubmenu menu, SerializableRun checkpoint)
@@ -794,9 +796,88 @@ public static class FixtureTest
         if (ignoreBtn != null)
             ignoreBtn.EmitSignal(BaseButton.SignalName.Pressed);
         Require(ignoreClicked, "Clicking IgnoreMissingModButton must invoke onIgnore callback");
-        Require(menu.GetNodeOrNull<Control>("MidRunJoinMissingModModal") == null,
+        Require(menu!.GetNodeOrNull<Control>("MidRunJoinMissingModModal") == null,
             "Clicking IgnoreMissingModButton must close the warning modal");
         langOverrideProp.SetValue(null, null);
+
+        // 6. In-game performance / anti-stutter regression budgets (modal open, 30-floor late-game catch-up, SafeGetEntry)
+        {
+            // 6a. Roster modal open latency
+            var perfSw = Stopwatch.StartNew();
+            var perfModal = ShiftLoad(menu!, checkpoint);
+            perfSw.Stop();
+            double rosterModalMs = perfSw.Elapsed.TotalMilliseconds;
+            (perfModal.FindChild("CancelButton", true, false) as Button)?.EmitSignal(BaseButton.SignalName.Pressed);
+            Require(rosterModalMs < 250.0, $"Roster modal open too slow: {rosterModalMs:F1} ms (budget < 250 ms)");
+
+            // 6b. Missing-mod warning modal open latency (4 missing peers)
+            var fourMissing = new List<MidRunJoin.MissingModPeerInfo>
+            {
+                new(2, "TeammateA", MidRunJoin.MissingModPeerRole.ExistingTeammate),
+                new(3, "GuestB", MidRunJoin.MissingModPeerRole.NewGuest),
+                new(4, "GuestC", MidRunJoin.MissingModPeerRole.NewGuest),
+                new(5, "RestoredD", MidRunJoin.MissingModPeerRole.RestoredGuest)
+            };
+            perfSw.Restart();
+            var perfWarn = (Control)showOrRefresh.Invoke(null, [menu!, fourMissing, (Action)(() => { })])!;
+            perfSw.Stop();
+            double warnModalMs = perfSw.Elapsed.TotalMilliseconds;
+            (perfWarn.FindChild("IgnoreMissingModButton", true, false) as Button)?.EmitSignal(BaseButton.SignalName.Pressed);
+            Require(warnModalMs < 100.0, $"Missing-mod modal open too slow: {warnModalMs:F1} ms (budget < 100 ms)");
+
+            // 6c. Late-game 30-floor HistoryBell BuildRewards & BuildSafeSyncRewards latency
+            var lateRun = CloneRun(backfillCheck);
+            var act0 = lateRun.MapPointHistory[0];
+            for (int f = 0; f < 28; f++)
+            {
+                var pt = (f % 7) switch
+                {
+                    0 or 1 or 2 => MapPointType.Monster,
+                    3 => MapPointType.Elite,
+                    4 => MapPointType.RestSite,
+                    5 => MapPointType.Treasure,
+                    _ => MapPointType.Unknown
+                };
+                var rt = pt switch
+                {
+                    MapPointType.Elite => RoomType.Elite,
+                    MapPointType.Monster => RoomType.Monster,
+                    MapPointType.RestSite => RoomType.RestSite,
+                    MapPointType.Treasure => RoomType.Treasure,
+                    _ => RoomType.Event
+                };
+                var e = new MapPointHistoryEntry { MapPointType = pt };
+                e.Rooms.Add(new MapPointRoomHistoryEntry { RoomType = rt });
+                e.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = 1, MaxHp = 80, CurrentHp = 70 });
+                e.PlayerStats.Add(new PlayerMapPointHistoryEntry { PlayerId = 2, MaxHp = 80, CurrentHp = 70 });
+                act0.Add(e);
+            }
+            var lateState = RunState.FromSerializable(lateRun);
+            var lateGuest = lateState.Players.First(p => p.NetId == 3);
+            var bellFlow = (HistoryBellCatchUpFlow)CatchUpRegistry.Default;
+            perfSw.Restart();
+            var fullLateRewards = bellFlow.BuildRewards(lateState, lateGuest);
+            perfSw.Stop();
+            double buildFullMs = perfSw.Elapsed.TotalMilliseconds;
+            perfSw.Restart();
+            var safeLateRewards = bellFlow.BuildSafeSyncRewards(lateState, lateGuest, isRestored: false);
+            perfSw.Stop();
+            double buildSafeMs = perfSw.Elapsed.TotalMilliseconds;
+            Require(fullLateRewards.Count > 5 && safeLateRewards.Count > 5, "30-floor catch-up produced too few rewards");
+            Require(buildFullMs < 150.0, $"30-floor BuildRewards too slow: {buildFullMs:F1} ms (budget < 150 ms)");
+            Require(buildSafeMs < 150.0, $"30-floor BuildSafeSyncRewards too slow: {buildSafeMs:F1} ms (budget < 150 ms)");
+
+            // 6d. HistorySafety.SafeGetEntry hot path (1000 calls on missing player)
+            var sampleEntry = lateState.MapPointHistory[0][0];
+            for (int i = 0; i < 50; i++) _ = sampleEntry.GetEntry(999);
+            perfSw.Restart();
+            for (int i = 0; i < 1000; i++) _ = sampleEntry.GetEntry(999);
+            perfSw.Stop();
+            double safeGet1kMs = perfSw.Elapsed.TotalMilliseconds;
+            Require(safeGet1kMs < 15.0, $"HistorySafety.SafeGetEntry x1000 too slow: {safeGet1kMs:F2} ms (budget < 15 ms)");
+
+            Log.Info($"[MidRunJoinSmoke] PERF PASS: RosterModal={rosterModalMs:F1}ms, WarnModal={warnModalMs:F1}ms, BuildFull30F={buildFullMs:F1}ms, BuildSafe30F={buildSafeMs:F1}ms, SafeGetEntry1k={safeGet1kMs:F2}ms");
+        }
 
         Log.Info($"[MidRunJoinSmoke] PASS: MultiGuestDialog + MultiRemoveGUI + SchemeB ({expectedGuest3Char}, {expectedGuest4Char}, {checkCount} checks)");
     }
